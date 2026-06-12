@@ -22,6 +22,13 @@ checksum:
 changelog:
   use: github
 
+# The formula is always generated into dist/homebrew/; uploading it requires
+# the skyneticist/homebrew-tap repo to exist and a PAT with write access to it
+# (the default GITHUB_TOKEN cannot push to other repos). To enable publishing:
+#   1. Create the homebrew-tap repo with an initial commit.
+#   2. Add a fine-grained PAT (contents: read/write on homebrew-tap) as the
+#      HOMEBREW_TAP_GITHUB_TOKEN secret.
+#   3. Set skip_upload to false; the token is wired in release.yml.
 brews:
   - name: depbisect
     description: "git bisect, but for dependency updates"
@@ -30,4 +37,5 @@ brews:
     repository:
       owner: skyneticist
       name: homebrew-tap
-    skip_upload: auto
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    skip_upload: true

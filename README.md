@@ -43,6 +43,9 @@ depbisect run --base origin/main --runs 3 -- npm test    # bisect
 The command after `--` is executed verbatim — no shell. For shell features:
 `depbisect run --base main -- sh -c 'npm test 2>&1 | grep -v warn'`.
 
+No repo at hand? `./examples/make-demo.sh` generates an offline demo
+repository with a known culprit — see [examples/README.md](examples/README.md).
+
 ## Supported package managers
 
 | Manager | Manifest | Lockfile |

@@ -30,6 +30,41 @@ jobs:
       - name: go test -race
         run: go test -race ./...
 
+  demo:
+    name: CLI smoke test against example repo
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - name: Generate example repo
+        run: ./examples/make-demo.sh
+      - name: Build CLI
+        run: go build ./cmd/depbisect
+      - name: Bisect the example repo
+        run: ./depbisect run --repo examples/demo/app --base HEAD~1 --runs 3 -- node test.js
+      - name: Assert the culprit was identified
+        run: |
+          node -e '
+            const r = require("./depbisect-report.json");
+            if (r.outcome !== "minimal-set-found" || r.minimalSet.length !== 1 || r.minimalSet[0].name !== "leftpad") {
+              console.error("unexpected result:", JSON.stringify({outcome: r.outcome, minimalSet: r.minimalSet}, null, 2));
+              process.exit(1);
+            }
+            console.log("demo verified: culprit =", r.minimalSet[0].name, "reproduced", r.confidence.failures + "/" + r.confidence.runs);
+          '
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: demo-report-${{ matrix.os }}
+          path: depbisect-report.*
+          if-no-files-found: ignore
+
   staticcheck:
     runs-on: ubuntu-latest
     steps:
