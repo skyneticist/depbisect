@@ -42,27 +42,68 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
-      - name: Generate example repo
+      - name: Generate simple example repo
         run: ./examples/make-demo.sh
       - name: Build CLI
         run: go build ./cmd/depbisect
-      - name: Bisect the example repo
-        run: ./depbisect run --repo examples/demo/app --base HEAD~1 --runs 3 -- node test.js
-      - name: Assert the culprit was identified
+      - name: Bisect the simple example repo
+        run: |
+          ./depbisect run \
+            --repo examples/demo/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --report-md depbisect-simple-report.md \
+            --report-json depbisect-simple-report.json \
+            -- node test.js
+      - name: Assert the simple culprit was identified
         run: |
           node -e '
-            const r = require("./depbisect-report.json");
+            const r = require("./depbisect-simple-report.json");
             if (r.outcome !== "minimal-set-found" || r.minimalSet.length !== 1 || r.minimalSet[0].name !== "leftpad") {
               console.error("unexpected result:", JSON.stringify({outcome: r.outcome, minimalSet: r.minimalSet}, null, 2));
               process.exit(1);
             }
             console.log("demo verified: culprit =", r.minimalSet[0].name, "reproduced", r.confidence.failures + "/" + r.confidence.runs);
           '
+      - name: Generate complex example repo
+        run: ./examples/make-demo-complex.sh
+      - name: Bisect the complex example repo
+        run: |
+          ./depbisect run \
+            --repo examples/demo-complex/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --report-md depbisect-complex-report.md \
+            --report-json depbisect-complex-report.json \
+            -- node test.js
+      - name: Assert the interacting culprits were identified
+        run: |
+          node -e '
+            const r = require("./depbisect-complex-report.json");
+            const expected = ["cache-reader", "cache-writer", "wire-decoder", "wire-encoder", "wire-transport"];
+            const actual = r.minimalSet.map((change) => change.name);
+            const valid =
+              r.outcome === "minimal-set-found" &&
+              r.changes.length === 12 &&
+              r.confidence.failures === 3 &&
+              r.confidence.runs === 3 &&
+              JSON.stringify(actual) === JSON.stringify(expected);
+            if (!valid) {
+              console.error("unexpected result:", JSON.stringify({
+                outcome: r.outcome,
+                changes: r.changes.length,
+                minimalSet: actual,
+                confidence: r.confidence
+              }, null, 2));
+              process.exit(1);
+            }
+            console.log("complex demo verified:", actual.join(", "), "reproduced 3/3");
+          '
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: demo-report-${{ matrix.os }}
-          path: depbisect-report.*
+          name: demo-reports-${{ matrix.os }}
+          path: depbisect-*-report.*
           if-no-files-found: ignore
 
   staticcheck:
