@@ -1,0 +1,48 @@
+# DepBisect Report
+
+**Outcome:** `minimal-set-found` — minimal failing set has 1 of 3 changes after 6 candidate tests
+
+| | |
+|---|---|
+| Base | `origin/main` (`111111111111`) |
+| Target | `HEAD` (`222222222222`) |
+| Package manager | npm |
+| Command | `npm test -- --grep "parser suite"` |
+| Runs per candidate | 3 |
+| Started | 2026-06-01T10:00:00Z |
+| Duration | 1m1s |
+| Tool | depbisect 1.2.3 |
+
+## Minimal failing set
+
+- beta 3.0.0 -> 3.2.0
+
+Reproduced 3/3 times.
+
+## Dependency changes (3)
+
+| Dependency | Section | Change | Old | New |
+|---|---|---|---|---|
+| alpha | dependencies | updated | ^1.0.0 (1.0.3) | ^1.5.0 (1.5.2) |
+| beta | dependencies | updated | 3.0.0 (3.0.0) | 3.2.0 (3.2.0) |
+| tool | devDependencies | added | — | 2.0.0 (2.0.0) |
+
+## Lockfile-only changes (1, not bisectable)
+
+| Dependency | Spec | Old resolved | New resolved |
+|---|---|---|---|
+| transit | ^4.0.0 | 4.0.1 | 4.9.0 |
+
+## Diagnostics
+
+- 1 dependencies changed only in the lockfile (version spec unchanged): transit (4.0.1 -> 4.9.0).
+
+## Trials (4)
+
+| # | Role | Applied changes | Outcome | Failed/Runs | Duration |
+|---|---|---|---|---|---|
+| 1 | baseline-old | none (all reverted) | pass | 0/3 | 12s |
+| 2 | baseline-new | dependencies:alpha, dependencies:beta, devDependencies:tool | fail | 3/3 | 14s |
+| 3 | candidate | dependencies:alpha | pass | 0/1 | 9s |
+| 4 | candidate | dependencies:beta | fail | 3/3 | 13s |
+

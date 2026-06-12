@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 1,
+  "tool": "depbisect",
+  "toolVersion": "1.2.3",
+  "outcome": "minimal-set-found",
+  "outcomeDetail": "minimal failing set has 1 of 3 changes after 6 candidate tests",
+  "base": {
+    "rev": "origin/main",
+    "sha": "1111111111111111111111111111111111111111"
+  },
+  "target": {
+    "rev": "HEAD",
+    "sha": "2222222222222222222222222222222222222222"
+  },
+  "packageManager": "npm",
+  "command": [
+    "npm",
+    "test",
+    "--",
+    "--grep",
+    "parser suite"
+  ],
+  "runsPerCandidate": 3,
+  "changes": [
+    {
+      "name": "alpha",
+      "section": "dependencies",
+      "kind": "updated",
+      "oldSpec": "^1.0.0",
+      "newSpec": "^1.5.0",
+      "oldResolved": "1.0.3",
+      "newResolved": "1.5.2"
+    },
+    {
+      "name": "beta",
+      "section": "dependencies",
+      "kind": "updated",
+      "oldSpec": "3.0.0",
+      "newSpec": "3.2.0",
+      "oldResolved": "3.0.0",
+      "newResolved": "3.2.0"
+    },
+    {
+      "name": "tool",
+      "section": "devDependencies",
+      "kind": "added",
+      "newSpec": "2.0.0",
+      "newResolved": "2.0.0"
+    }
+  ],
+  "lockfileOnlyChanges": [
+    {
+      "name": "transit",
+      "section": "dependencies",
+      "spec": "^4.0.0",
+      "oldResolved": "4.0.1",
+      "newResolved": "4.9.0"
+    }
+  ],
+  "minimalSet": [
+    {
+      "name": "beta",
+      "section": "dependencies",
+      "kind": "updated",
+      "oldSpec": "3.0.0",
+      "newSpec": "3.2.0",
+      "oldResolved": "3.0.0",
+      "newResolved": "3.2.0"
+    }
+  ],
+  "confidence": {
+    "failures": 3,
+    "runs": 3
+  },
+  "diagnostics": [
+    "1 dependencies changed only in the lockfile (version spec unchanged): transit (4.0.1 -> 4.9.0)."
+  ],
+  "trials": [
+    {
+      "role": "baseline-old",
+      "applied": [],
+      "outcome": "pass",
+      "runs": 3,
+      "failures": 0,
+      "durationMs": 12000
+    },
+    {
+      "role": "baseline-new",
+      "applied": [
+        "dependencies:alpha",
+        "dependencies:beta",
+        "devDependencies:tool"
+      ],
+      "outcome": "fail",
+      "runs": 3,
+      "failures": 3,
+      "durationMs": 14000
+    },
+    {
+      "role": "candidate",
+      "applied": [
+        "dependencies:alpha"
+      ],
+      "outcome": "pass",
+      "runs": 1,
+      "failures": 0,
+      "durationMs": 9000
+    },
+    {
+      "role": "candidate",
+      "applied": [
+        "dependencies:beta"
+      ],
+      "outcome": "fail",
+      "runs": 3,
+      "failures": 3,
+      "durationMs": 13000
+    }
+  ],
+  "startedAt": "2026-06-01T10:00:00Z",
+  "finishedAt": "2026-06-01T10:01:01Z",
+  "durationSeconds": 61
+}

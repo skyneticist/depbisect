@@ -1,0 +1,97 @@
+name: DepBisect
+description: >-
+  Find the smallest set of package.json dependency updates between two Git
+  revisions that makes a command fail. Requires a checkout with enough history
+  to contain the base revision (actions/checkout with fetch-depth: 0).
+branding:
+  icon: git-commit
+  color: orange
+
+inputs:
+  base:
+    description: Base revision to compare against (e.g. the PR base SHA).
+    required: true
+  command:
+    description: >-
+      Verification command. The action runs it via `bash -c`, so shell
+      syntax works here (unlike the CLI, which takes an exact argv).
+    required: true
+  to:
+    description: Target revision.
+    required: false
+    default: HEAD
+  runs:
+    description: Verification runs per candidate (flaky-test protection).
+    required: false
+    default: "1"
+  pm:
+    description: Package manager override (npm or pnpm). Default autodetect.
+    required: false
+    default: ""
+  run-timeout:
+    description: Timeout per verification run (Go duration, e.g. 10m).
+    required: false
+    default: "0s"
+  version:
+    description: depbisect version to install (a tag like v0.1.0, or latest).
+    required: false
+    default: latest
+  working-directory:
+    description: Repository directory to operate on.
+    required: false
+    default: "."
+
+outputs:
+  outcome:
+    description: Outcome code (minimal-set-found, not-reproduced, ...).
+    value: ${{ steps.bisect.outputs.outcome }}
+  exit-code:
+    description: depbisect exit code (see README).
+    value: ${{ steps.bisect.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version: stable
+        cache: false
+
+    - name: Install depbisect
+      shell: bash
+      env:
+        DEPBISECT_VERSION: ${{ inputs.version }}
+      run: go install "github.com/skyneticist/depbisect/cmd/depbisect@${DEPBISECT_VERSION}"
+
+    - name: Run depbisect
+      id: bisect
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        DB_BASE: ${{ inputs.base }}
+        DB_TO: ${{ inputs.to }}
+        DB_RUNS: ${{ inputs.runs }}
+        DB_PM: ${{ inputs.pm }}
+        DB_TIMEOUT: ${{ inputs.run-timeout }}
+        DB_COMMAND: ${{ inputs.command }}
+      run: |
+        set -o pipefail
+        args=(run --base "$DB_BASE" --to "$DB_TO" --runs "$DB_RUNS" --run-timeout "$DB_TIMEOUT")
+        if [ -n "$DB_PM" ]; then
+          args+=(--pm "$DB_PM")
+        fi
+        set +e
+        depbisect "${args[@]}" -- bash -c "$DB_COMMAND"
+        code=$?
+        set -e
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        outcome=unknown
+        if [ -f depbisect-report.json ]; then
+          outcome=$(python3 -c 'import json;print(json.load(open("depbisect-report.json"))["outcome"])' || echo unknown)
+        fi
+        echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+        # Exit codes 2-5 are diagnostic outcomes, not action failures; the
+        # report tells the story. Only usage/runtime errors fail the step.
+        if [ "$code" -eq 1 ]; then
+          exit 1
+        fi
