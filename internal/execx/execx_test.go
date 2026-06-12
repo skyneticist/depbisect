@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -122,7 +123,7 @@ func TestRunZeroExit(t *testing.T) {
 }
 
 func TestRunDirWithSpaces(t *testing.T) {
-	dir := t.TempDir() + "/has spaces & (chars)"
+	dir := filepath.Join(t.TempDir(), "has spaces & (chars)")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -162,6 +163,17 @@ func TestRunExtraEnvAndInheritance(t *testing.T) {
 	}
 	if string(res.Stdout) != "v with spaces" {
 		t.Errorf("extra env = %q", res.Stdout)
+	}
+
+	t.Setenv("EXECX_OVERRIDE", "old")
+	c = helperCmd("env", "EXECX_OVERRIDE")
+	c.ExtraEnv = append(c.ExtraEnv, "EXECX_OVERRIDE=new")
+	res, err = Local{}.Run(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(res.Stdout) != "new" {
+		t.Errorf("overridden env = %q, want new", res.Stdout)
 	}
 }
 

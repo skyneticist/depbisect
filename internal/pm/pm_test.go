@@ -66,6 +66,9 @@ func TestInstallInvocation(t *testing.T) {
 	if c.Name != "pnpm" || c.Dir != "/work dir" {
 		t.Errorf("cmd = %+v", c)
 	}
+	if !c.AllowTrustedBatch {
+		t.Error("package manager invocation must allow its fixed arguments through Windows batch shims")
+	}
 	// pnpm freezes the lockfile by default when CI=true; DepBisect must
 	// always override that, or candidate installs fail on CI runners.
 	joined := strings.Join(c.Args, " ")

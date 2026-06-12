@@ -6,7 +6,6 @@
 - **Yarn.** Only npm and pnpm lockfiles are recognized.
 - **Missing lockfile.** A `package-lock.json` or `pnpm-lock.yaml` must exist at `--to` (or pass `--pm` explicitly to proceed without resolution info).
 - **Ambiguous lockfiles.** If both lockfiles exist, choose with `--pm npm` or `--pm pnpm`.
-- **Windows.** The codebase avoids Unix-isms where practical, but Windows is untested and unsupported in this release.
 
 ## Supported but with caveats (reported as diagnostics, never silent)
 
@@ -16,6 +15,14 @@
 - **`peerDependencies`.** Changes there are not diffed or bisected.
 - **Uncommitted changes.** DepBisect compares committed revisions only; dirty `package.json`/lockfile files trigger a warning.
 - **Flaky tests.** With `--runs 1` a flaky failure can be misattributed. Use `--runs 3` or more; mixed results are detected and reported.
+- **Windows batch verification commands.** Implicit `.bat` and `.cmd`
+  execution is rejected because `cmd.exe` does not preserve arbitrary argument
+  vectors safely. Invoke `cmd.exe /d /s /c` explicitly when shell semantics
+  are intended. DepBisect handles npm/pnpm's fixed install arguments through a
+  restricted internal batch-command path.
+- **Process descendants on cancellation.** DepBisect stops the direct
+  subprocess on timeout or interruption. Programs that detach descendants may
+  leave those independent processes running.
 - **Version spec edge cases.** pnpm v5 lockfile versions with both build metadata and a peer suffix (e.g. `1.2.3+build_meta`) may display a truncated resolved version. Display-only; does not affect bisection.
 
 ## Interpreting non-zero exits

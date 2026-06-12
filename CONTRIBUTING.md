@@ -2,7 +2,7 @@
 
 ## Setup
 
-Go 1.20+ and git are required; `node` enables the end-to-end tests (they are skipped without it). No network access is needed to run tests.
+Go 1.20+ and git are required; `node` enables the end-to-end tests (they are skipped without it). No network access is needed to run tests. CI covers the minimum Go version plus Go's current stable and oldstable releases on Linux, macOS, and Windows.
 
 ```sh
 go build ./...

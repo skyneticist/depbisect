@@ -29,7 +29,7 @@ func initRepo(t *testing.T) (dir, first, second string) {
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
 			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid",
-			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+			"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull,
 		)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -38,6 +38,8 @@ func initRepo(t *testing.T) (dir, first, second string) {
 		return strings.TrimSpace(string(out))
 	}
 	run("init", "-q", "-b", "main")
+	run("config", "core.autocrlf", "false")
+	run("config", "core.filemode", "false")
 	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"a","dependencies":{"x":"1.0.0"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}

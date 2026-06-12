@@ -27,7 +27,7 @@ Report: depbisect-report.md (JSON: depbisect-report.json)
 # Go
 go install github.com/skyneticist/depbisect/cmd/depbisect@latest
 
-# Or download a release binary (macOS/Linux, amd64/arm64) and verify:
+# Or download a release binary (Linux/macOS/Windows, amd64/arm64) and verify:
 # https://github.com/skyneticist/depbisect/releases
 shasum -c --ignore-missing checksums.txt
 ```
@@ -42,6 +42,9 @@ depbisect run --base origin/main --runs 3 -- npm test    # bisect
 
 The command after `--` is executed verbatim — no shell. For shell features:
 `depbisect run --base main -- sh -c 'npm test 2>&1 | grep -v warn'`.
+On Windows, `.bat` and `.cmd` verification commands are rejected unless you
+invoke the shell explicitly, for example:
+`depbisect run --base main -- cmd.exe /d /s /c "npm test"`.
 
 No repo at hand? `./examples/make-demo.sh` generates an offline demo
 repository with a known culprit — see [examples/README.md](examples/README.md).
@@ -70,7 +73,10 @@ DepBisect diffs the direct dependencies declared in `package.json` between `--ba
 
 - Only direct dependency changes in `package.json` are bisected. Lockfile-only changes (same spec, different resolution) are detected and reported, not bisected.
 - Installing candidates needs registry access and uses your normal npm/pnpm configuration.
-- Workspaces, yarn, and Windows are not supported yet.
+- Workspaces and yarn are not supported yet.
+- On Windows, npm/pnpm batch shims are supported for DepBisect's fixed install
+  commands. User-supplied `.bat`/`.cmd` verification commands require explicit
+  `cmd.exe` invocation so shell parsing is never enabled accidentally.
 
 See [docs/limitations.md](docs/limitations.md) for the full list, [docs/how-it-works.md](docs/how-it-works.md) for internals, and [docs/security.md](docs/security.md) for the threat model.
 

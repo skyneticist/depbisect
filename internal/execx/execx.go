@@ -31,6 +31,10 @@ type Cmd struct {
 	// ExtraEnv entries ("KEY=VALUE") are appended to the inherited
 	// environment of the parent process.
 	ExtraEnv []string
+	// AllowTrustedBatch permits a Windows .bat or .cmd program only when
+	// every argument is fixed, trusted input. Batch files require cmd.exe
+	// and cannot provide exec-style argument safety for arbitrary values.
+	AllowTrustedBatch bool
 	// Stream, when non-nil, additionally receives interleaved stdout and
 	// stderr as the process produces them. Writes are serialized.
 	Stream io.Writer
@@ -58,18 +62,19 @@ type Runner interface {
 // Local runs subprocesses on the local machine.
 type Local struct{}
 
-// Run implements Runner. On context cancellation the process receives an
-// interrupt signal, then is killed after a 10s grace period.
+// Run implements Runner. Cancellation is configured per platform: Unix-like
+// systems send an interrupt before a forced kill, while Windows terminates
+// the process because os.Interrupt is not implemented there.
 func (Local) Run(ctx context.Context, c Cmd) (Result, error) {
-	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
+	cmd, err := commandContext(ctx, c)
+	if err != nil {
+		return Result{}, fmt.Errorf("run %s: %w", c.Name, err)
+	}
 	cmd.Dir = c.Dir
 	if len(c.ExtraEnv) > 0 {
 		cmd.Env = append(os.Environ(), c.ExtraEnv...)
 	}
-	cmd.Cancel = func() error {
-		return cmd.Process.Signal(os.Interrupt)
-	}
-	cmd.WaitDelay = 10 * time.Second
+	configureCancellation(cmd)
 
 	stdout := &tailBuffer{limit: maxCapturedOutput}
 	stderr := &tailBuffer{limit: maxCapturedOutput}
@@ -83,7 +88,7 @@ func (Local) Run(ctx context.Context, c Cmd) (Result, error) {
 	}
 
 	start := time.Now()
-	err := cmd.Run()
+	err = cmd.Run()
 	res := Result{
 		Stdout:   stdout.Bytes(),
 		Stderr:   stderr.Bytes(),
