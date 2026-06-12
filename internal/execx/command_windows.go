@@ -80,6 +80,8 @@ func trustedBatchCommand(ctx context.Context, path string, args []string) (*exec
 }
 
 func configureCancellation(cmd *exec.Cmd) {
-	cmd.Cancel = cmd.Process.Kill
+	cmd.Cancel = func() error {
+		return cmd.Process.Kill()
+	}
 	cmd.WaitDelay = 10 * time.Second
 }
