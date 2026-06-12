@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,12 +15,16 @@ import (
 var binPath string
 
 func TestMain(m *testing.M) {
+	if os.Getenv("DEPBISECT_PM_HELPER") != "" {
+		runPMHelper()
+		return
+	}
 	dir, err := os.MkdirTemp("", "depbisect-e2e-bin")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	binPath = filepath.Join(dir, "depbisect")
+	binPath = filepath.Join(dir, executableName("depbisect"))
 	out, err := exec.Command("go", "build", "-o", binPath, ".").CombinedOutput()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build: %v\n%s", err, out)
@@ -28,6 +33,25 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+func executableName(name string) string {
+	if runtime.GOOS == "windows" {
+		return name + ".exe"
+	}
+	return name
+}
+
+func runPMHelper() {
+	logPath := os.Getenv("PM_LOG")
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer f.Close()
+	name := strings.TrimSuffix(filepath.Base(os.Args[0]), filepath.Ext(os.Args[0]))
+	fmt.Fprintf(f, "%s %s\n", name, strings.Join(os.Args[1:], " "))
 }
 
 func requireTools(t *testing.T) string {
@@ -90,7 +114,7 @@ func gitIn(t *testing.T, dir string, args ...string) string {
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid",
-		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -114,6 +138,8 @@ func initRepo(t *testing.T, pmKind string) *repo {
 		t.Fatal(err)
 	}
 	gitIn(t, dir, "init", "-q", "-b", "main")
+	gitIn(t, dir, "config", "core.autocrlf", "false")
+	gitIn(t, dir, "config", "core.filemode", "false")
 	write(t, filepath.Join(dir, "package.json"), basePkgJSON)
 	if pmKind == "pnpm" {
 		write(t, filepath.Join(dir, "pnpm-lock.yaml"), pnpmLock("1.0.0", "1.0.0", "1.0.0"))
@@ -135,14 +161,31 @@ func initRepo(t *testing.T, pmKind string) *repo {
 	return &repo{dir: dir, first: first}
 }
 
-// stubPM creates fake npm and pnpm binaries that log their argv and succeed.
+// stubPM creates fake npm and pnpm commands that log their argv and succeed.
 func stubPM(t *testing.T) (stubDir, logPath string) {
 	t.Helper()
-	stubDir = t.TempDir()
+	stubDir = filepath.Join(t.TempDir(), "package manager stubs")
+	if err := os.MkdirAll(stubDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	logPath = filepath.Join(t.TempDir(), "pm.log")
-	script := "#!/bin/sh\nprintf '%s %s\\n' \"$(basename \"$0\")\" \"$*\" >> \"$PM_LOG\"\nexit 0\n"
 	for _, name := range []string{"npm", "pnpm"} {
-		if err := os.WriteFile(filepath.Join(stubDir, name), []byte(script), 0o755); err != nil {
+		if runtime.GOOS == "windows" {
+			script := "@echo off\r\n>>\"%PM_LOG%\" echo " + name + " %*\r\nexit /b 0\r\n"
+			if err := os.WriteFile(filepath.Join(stubDir, name+".cmd"), []byte(script), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		testExe, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(testExe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(stubDir, name), data, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -163,8 +206,11 @@ func runBin(t *testing.T, r *repo, workDir, tmpDir, stubDir, logPath string, arg
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(),
 		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"DEPBISECT_PM_HELPER=1",
 		"PM_LOG="+logPath,
 		"TMPDIR="+tmpDir,
+		"TMP="+tmpDir,
+		"TEMP="+tmpDir,
 	)
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -459,6 +505,9 @@ func TestE2EKeepWorktrees(t *testing.T) {
 }
 
 func TestE2EInterruptCleansUp(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Go cannot portably generate a Windows console interrupt for another process")
+	}
 	node := requireTools(t)
 	r := initRepo(t, "npm")
 	stubDir, logPath := stubPM(t)
@@ -472,8 +521,11 @@ func TestE2EInterruptCleansUp(t *testing.T) {
 	cmd.Dir = outDir
 	cmd.Env = append(os.Environ(),
 		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"DEPBISECT_PM_HELPER=1",
 		"PM_LOG="+logPath,
 		"TMPDIR="+tmpDir,
+		"TMP="+tmpDir,
+		"TEMP="+tmpDir,
 	)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr

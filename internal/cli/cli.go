@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/skyneticist/depbisect/internal/engine"
@@ -167,7 +166,7 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 		return ExitError
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), terminationSignals()...)
 	defer stop()
 	go func() {
 		// After the first signal cancels the run, restore default signal

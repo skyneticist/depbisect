@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Windows support, including native CI coverage, npm/pnpm batch-shim handling,
+  prompt subprocess cancellation, and amd64/arm64 release archives.
+
 ## [0.1.0] - 2026-06-11
 
 ### Added

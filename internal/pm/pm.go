@@ -88,9 +88,10 @@ func (i Installer) CheckAvailable() error {
 // the Result, not as an error. stream, when non-nil, receives live output.
 func (i Installer) Install(ctx context.Context, dir string, stream io.Writer) (execx.Result, error) {
 	return i.Runner.Run(ctx, execx.Cmd{
-		Dir:    dir,
-		Name:   string(i.Manager),
-		Args:   i.Manager.installArgs(),
-		Stream: stream,
+		Dir:               dir,
+		Name:              string(i.Manager),
+		Args:              i.Manager.installArgs(),
+		AllowTrustedBatch: true,
+		Stream:            stream,
 	})
 }
