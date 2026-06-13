@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/skyneticist/depbisect/internal/engine"
 )
@@ -43,6 +44,23 @@ func (p *progress) Detail(format string, args ...any) {
 	fmt.Fprintf(p.w, "    %s\n", fmt.Sprintf(format, args...))
 }
 
+func (p *progress) Trial(number int, role string, applied, total int, phase string, elapsed time.Duration) {
+	switch phase {
+	case "preparing":
+		fmt.Fprintf(p.w, "--> Trial %d [%s, %d/%d changes]: preparing\n",
+			number, role, applied, total)
+	case "installing":
+		fmt.Fprintf(p.w, "--> Trial %d [%s, %d/%d changes]: installing after %s\n",
+			number, role, applied, total, elapsed.Round(100*time.Millisecond))
+	case "verifying":
+		fmt.Fprintf(p.w, "--> Trial %d [%s, %d/%d changes]: verifying after %s\n",
+			number, role, applied, total, elapsed.Round(100*time.Millisecond))
+	default:
+		fmt.Fprintf(p.w, "--> Trial %d [%s, %d/%d changes]: %s in %s\n",
+			number, role, applied, total, phase, elapsed.Round(100*time.Millisecond))
+	}
+}
+
 // printSummary writes the final human-readable result to stdout.
 func printSummary(w io.Writer, res *engine.Result, mdPath, jsonPath string) {
 	fmt.Fprintf(w, "\nAnalyzed %d dependency changes\n", len(res.Changes))
@@ -54,6 +72,14 @@ func printSummary(w io.Writer, res *engine.Result, mdPath, jsonPath string) {
 			fmt.Fprintf(w, "  %s\n", c.String())
 		}
 		fmt.Fprintf(w, "\nReproduced %d/%d times\n", res.Confidence.Failures, res.Confidence.Runs)
+	case engine.OutcomeInconclusive:
+		if len(res.Minimal) > 0 {
+			fmt.Fprintf(w, "\nBest-known failing set:\n")
+			for _, c := range res.Minimal {
+				fmt.Fprintf(w, "  %s\n", c.String())
+			}
+		}
+		fmt.Fprintf(w, "\nOutcome: %s\n%s\n", res.Outcome, res.OutcomeDetail)
 	default:
 		fmt.Fprintf(w, "\nOutcome: %s\n%s\n", res.Outcome, res.OutcomeDetail)
 	}

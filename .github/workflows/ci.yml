@@ -9,6 +9,25 @@ permissions:
   contents: read
 
 jobs:
+  quality:
+    name: Formatting, vet, and static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: gofmt
+        shell: bash
+        run: test -z "$(gofmt -l .)"
+      - name: go vet
+        run: go vet ./...
+      - name: staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+          staticcheck ./...
+
   test:
     name: ${{ matrix.os }} / Go ${{ matrix.go }}
     strategy:
@@ -17,18 +36,28 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         go: ["1.20.x", oldstable, stable]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go }}
-      - name: gofmt
-        shell: bash
-        run: test -z "$(gofmt -l .)"
-      - name: go vet
-        run: go vet ./...
       - name: go test
         run: go test ./...
+
+  race:
+    name: Race detector / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
       - name: go test -race
         run: go test -race ./...
 
@@ -39,6 +68,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -108,14 +138,52 @@ jobs:
           path: depbisect-*-report.*
           if-no-files-found: ignore
 
-  staticcheck:
+  action-smoke:
+    name: Local GitHub Action behavior
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - name: Generate action fixture
+        run: ./examples/make-demo.sh
+      - name: Action finds the culprit
+        id: culprit
+        uses: ./
         with:
-          go-version: stable
-      - name: staticcheck
+          base: HEAD~1
+          command: node test.js
+          working-directory: examples/demo/app
+      - name: Assert successful action outputs
+        env:
+          OUTCOME: ${{ steps.culprit.outputs.outcome }}
+          EXIT_CODE: ${{ steps.culprit.outputs.exit-code }}
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
-          staticcheck ./...
+          test "$OUTCOME" = "minimal-set-found"
+          test "$EXIT_CODE" = "0"
+      - name: Diagnostic CLI outcome does not fail the action
+        id: diagnostic
+        uses: ./
+        with:
+          base: HEAD~1
+          command: node -e "process.exit(0)"
+          working-directory: examples/demo/app
+      - name: Assert diagnostic action outputs
+        env:
+          OUTCOME: ${{ steps.diagnostic.outputs.outcome }}
+          EXIT_CODE: ${{ steps.diagnostic.outputs.exit-code }}
+        run: |
+          test "$OUTCOME" = "not-reproduced"
+          test "$EXIT_CODE" = "2"
+      - name: Runtime errors fail the action
+        id: invalid
+        continue-on-error: true
+        uses: ./
+        with:
+          base: HEAD~1
+          command: node test.js
+          pm: invalid
+          working-directory: examples/demo/app
+      - name: Assert runtime failure was propagated
+        env:
+          STEP_OUTCOME: ${{ steps.invalid.outcome }}
+        run: test "$STEP_OUTCOME" = "failure"

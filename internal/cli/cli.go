@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/skyneticist/depbisect/internal/checkpoint"
 	"github.com/skyneticist/depbisect/internal/engine"
 	"github.com/skyneticist/depbisect/internal/execx"
 	"github.com/skyneticist/depbisect/internal/gitx"
@@ -52,10 +53,17 @@ Flags for run:
   --runs <n>            verification runs per candidate; raises confidence
                         for flaky tests (default 1)
   --run-timeout <dur>   timeout per verification run, e.g. 10m (default none)
+  --install-timeout <dur>
+                        timeout per dependency install (default none)
+  --overall-timeout <dur>
+                        timeout for the complete bisection (default none)
   --pm <npm|pnpm>       package manager (default: detected from lockfile)
   --report-md <path>    Markdown report path (default "depbisect-report.md")
   --report-json <path>  JSON report path (default "depbisect-report.json")
   --no-reports          write no report files
+  --checkpoint <path>   resumable checkpoint path (default
+                        ".depbisect-checkpoint.jsonl"; empty disables)
+  --resume              resume completed trials from --checkpoint
   --keep-worktrees      keep the temporary worktree for inspection
   --dry-run             show detected changes and plan; run nothing
   --verbose             stream subprocess output and extra progress detail
@@ -65,7 +73,7 @@ Exit codes:
   1  usage or runtime error
   2  failure did not reproduce with all updates applied
   3  command fails even with all updates reverted
-  4  verification command too flaky to bisect
+  4  inconclusive: flaky verification or minimality could not be proven
   5  no direct dependency changes between the revisions
 `
 
@@ -95,19 +103,23 @@ func Main(args []string, stdout, stderr io.Writer, version string) int {
 
 // runOptions is the parsed flag set for `depbisect run`.
 type runOptions struct {
-	base          string
-	to            string
-	repo          string
-	runs          int
-	runTimeout    time.Duration
-	pm            string
-	reportMD      string
-	reportJSON    string
-	noReports     bool
-	keepWorktrees bool
-	dryRun        bool
-	verbose       bool
-	command       []string
+	base           string
+	to             string
+	repo           string
+	runs           int
+	runTimeout     time.Duration
+	installTimeout time.Duration
+	overallTimeout time.Duration
+	pm             string
+	reportMD       string
+	reportJSON     string
+	noReports      bool
+	checkpoint     string
+	resume         bool
+	keepWorktrees  bool
+	dryRun         bool
+	verbose        bool
+	command        []string
 }
 
 // parseRunArgs splits args at the first "--": flags before it, the
@@ -133,10 +145,14 @@ func parseRunArgs(args []string) (*runOptions, error) {
 	fs.StringVar(&opts.repo, "repo", ".", "")
 	fs.IntVar(&opts.runs, "runs", 1, "")
 	fs.DurationVar(&opts.runTimeout, "run-timeout", 0, "")
+	fs.DurationVar(&opts.installTimeout, "install-timeout", 0, "")
+	fs.DurationVar(&opts.overallTimeout, "overall-timeout", 0, "")
 	fs.StringVar(&opts.pm, "pm", "", "")
 	fs.StringVar(&opts.reportMD, "report-md", "depbisect-report.md", "")
 	fs.StringVar(&opts.reportJSON, "report-json", "depbisect-report.json", "")
 	fs.BoolVar(&opts.noReports, "no-reports", false, "")
+	fs.StringVar(&opts.checkpoint, "checkpoint", ".depbisect-checkpoint.jsonl", "")
+	fs.BoolVar(&opts.resume, "resume", false, "")
 	fs.BoolVar(&opts.keepWorktrees, "keep-worktrees", false, "")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "")
 	fs.BoolVar(&opts.verbose, "verbose", false, "")
@@ -151,6 +167,18 @@ func parseRunArgs(args []string) (*runOptions, error) {
 	}
 	if opts.runs < 1 {
 		return nil, errors.New("--runs must be at least 1")
+	}
+	if opts.runTimeout < 0 {
+		return nil, errors.New("--run-timeout must not be negative")
+	}
+	if opts.installTimeout < 0 {
+		return nil, errors.New("--install-timeout must not be negative")
+	}
+	if opts.overallTimeout < 0 {
+		return nil, errors.New("--overall-timeout must not be negative")
+	}
+	if opts.resume && opts.checkpoint == "" {
+		return nil, errors.New("--resume requires a non-empty --checkpoint path")
 	}
 	if len(command) == 0 {
 		return nil, errors.New("no verification command given after \"--\"")
@@ -183,6 +211,10 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 	if opts.verbose {
 		stream = stderr
 	}
+	var checkpointStore engine.CheckpointStore
+	if opts.checkpoint != "" && !opts.dryRun {
+		checkpointStore = checkpoint.NewFileStore(opts.checkpoint)
+	}
 	eng := &engine.Engine{
 		Git: git,
 		NewInstaller: func(m pm.Manager) engine.Installer {
@@ -207,13 +239,23 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 		KeepWorktrees: opts.keepWorktrees,
 		DryRun:        opts.dryRun,
 		Stream:        stream,
+		Checkpoint:    checkpointStore,
+		Resume:        opts.resume,
+		CheckpointContext: fmt.Sprintf("run-timeout=%s;install-timeout=%s;overall-timeout=%s",
+			opts.runTimeout, opts.installTimeout, opts.overallTimeout),
+		InstallTimeout: opts.installTimeout,
+		OverallTimeout: opts.overallTimeout,
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			fmt.Fprintln(stderr, "depbisect: interrupted; temporary worktrees were cleaned up")
+			fmt.Fprint(stderr, "depbisect: interrupted; temporary worktrees were cleaned up")
 		} else {
-			fmt.Fprintf(stderr, "depbisect: %v\n", err)
+			fmt.Fprintf(stderr, "depbisect: %v", err)
 		}
+		if checkpointStore != nil {
+			fmt.Fprintf(stderr, "; completed trials remain in %s (resume with --resume)", opts.checkpoint)
+		}
+		fmt.Fprintln(stderr)
 		return ExitError
 	}
 

@@ -24,10 +24,13 @@ type fakeGit struct {
 	mu                 sync.Mutex
 	files              map[string]map[string]string // sha -> path -> content
 	revs               map[string]string            // rev expr -> sha (identity for shas)
+	resets             int
 	removed            []string
 	pruned             int
 	dirty              map[string]bool
 	failWorktreeRemove bool
+	onReset            func()
+	onRemove           func()
 }
 
 func (g *fakeGit) resolve(rev string) (string, bool) {
@@ -84,7 +87,23 @@ func (g *fakeGit) AddWorktree(ctx context.Context, dir, rev string) error {
 	return nil
 }
 
+func (g *fakeGit) ResetWorktree(ctx context.Context, dir, rev string) error {
+	g.mu.Lock()
+	g.resets++
+	g.mu.Unlock()
+	if g.onReset != nil {
+		g.onReset()
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	return g.AddWorktree(ctx, dir, rev)
+}
+
 func (g *fakeGit) RemoveWorktree(ctx context.Context, dir string) error {
+	if g.onRemove != nil {
+		g.onRemove()
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.failWorktreeRemove {
@@ -134,18 +153,29 @@ func readDeps(t testing.TB, dir string) map[string]string {
 // fakeInstaller pretends to install; it can be scripted to fail for certain
 // manifests and records every install.
 type fakeInstaller struct {
-	mu       sync.Mutex
-	installs int
-	failWhen func(deps map[string]string) bool
-	t        testing.TB
+	mu            sync.Mutex
+	installs      int
+	failWhen      func(deps map[string]string) bool
+	onInstall     func(dir string)
+	waitForCancel bool
+	t             testing.TB
 }
 
-func (f *fakeInstaller) CheckAvailable() error { return nil }
+func (f *fakeInstaller) Version(context.Context) (string, error) {
+	return "npm test-version", nil
+}
 
 func (f *fakeInstaller) Install(ctx context.Context, dir string, stream io.Writer) (execx.Result, error) {
 	f.mu.Lock()
 	f.installs++
 	f.mu.Unlock()
+	if f.waitForCancel {
+		<-ctx.Done()
+		return execx.Result{}, ctx.Err()
+	}
+	if f.onInstall != nil {
+		f.onInstall(dir)
+	}
 	if f.failWhen != nil && f.failWhen(readDeps(f.t, dir)) {
 		return execx.Result{ExitCode: 1, Stderr: []byte("ERESOLVE")}, nil
 	}
@@ -159,6 +189,7 @@ type fakeVerifier struct {
 	calls    int
 	runs     int
 	failWhen func(deps map[string]string) bool
+	onVerify func()
 	// flakyFailures, when non-nil, supplies Failures for call i (cycling).
 	flakyFailures []int
 	t             testing.TB
@@ -167,6 +198,9 @@ type fakeVerifier struct {
 func (f *fakeVerifier) Verify(ctx context.Context, dir string, stopOnPass bool) (verify.Verdict, error) {
 	if err := ctx.Err(); err != nil {
 		return verify.Verdict{}, err
+	}
+	if f.onVerify != nil {
+		f.onVerify()
 	}
 	f.mu.Lock()
 	call := f.calls
@@ -224,6 +258,71 @@ type testEnv struct {
 	verifier  *fakeVerifier
 	tempDirs  []string
 	eng       *Engine
+}
+
+type fakeCheckpointStore struct {
+	checkpoint *Checkpoint
+	starts     int
+	appends    int
+	clears     int
+}
+
+func (s *fakeCheckpointStore) Load() (*Checkpoint, error) {
+	if s.checkpoint == nil {
+		return nil, os.ErrNotExist
+	}
+	cp := *s.checkpoint
+	cp.Fingerprint.Command = append([]string(nil), cp.Fingerprint.Command...)
+	cp.Fingerprint.Changes = append([]string(nil), cp.Fingerprint.Changes...)
+	cp.Trials = append([]Trial(nil), cp.Trials...)
+	return &cp, nil
+}
+
+func (s *fakeCheckpointStore) Start(cp Checkpoint) error {
+	s.starts++
+	cp.Fingerprint.Command = append([]string(nil), cp.Fingerprint.Command...)
+	cp.Fingerprint.Changes = append([]string(nil), cp.Fingerprint.Changes...)
+	cp.Trials = nil
+	s.checkpoint = &cp
+	return nil
+}
+
+func (s *fakeCheckpointStore) Append(trial Trial) error {
+	s.appends++
+	s.checkpoint.Trials = append(s.checkpoint.Trials, trial)
+	return nil
+}
+
+func (s *fakeCheckpointStore) Clear() error {
+	s.clears++
+	s.checkpoint = nil
+	return nil
+}
+
+type trialProgressEvent struct {
+	number  int
+	role    string
+	applied int
+	total   int
+	phase   string
+	elapsed time.Duration
+}
+
+type recordingProgress struct {
+	steps  []string
+	trials []trialProgressEvent
+}
+
+func (p *recordingProgress) Step(format string, args ...any) {
+	p.steps = append(p.steps, fmt.Sprintf(format, args...))
+}
+
+func (p *recordingProgress) Detail(string, ...any) {}
+
+func (p *recordingProgress) Trial(number int, role string, applied, total int, phase string, elapsed time.Duration) {
+	p.trials = append(p.trials, trialProgressEvent{
+		number: number, role: role, applied: applied, total: total, phase: phase, elapsed: elapsed,
+	})
 }
 
 func newEnv(t *testing.T, git *fakeGit, failWhen func(map[string]string) bool, runs int) *testEnv {
@@ -331,6 +430,39 @@ func TestRunFindsInteractingPair(t *testing.T) {
 	}
 	if got := minimalNames(res); ids(got) != "alpha,gamma" {
 		t.Errorf("minimal = %v, want [alpha gamma]", got)
+	}
+}
+
+func TestRunResetsWorktreeBeforeEveryExecutedTrial(t *testing.T) {
+	env := newEnv(t, threeChangeRepo(), func(deps map[string]string) bool {
+		return deps["beta"] == "3.2.0"
+	}, 1)
+	var contaminated bool
+	env.installer.onInstall = func(dir string) {
+		marker := filepath.Join(dir, "node_modules", ".depbisect-previous-trial")
+		if _, err := os.Stat(marker); err == nil {
+			contaminated = true
+		}
+		if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(marker, []byte("left by installer"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "generated.txt"), []byte("left by verifier"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contaminated {
+		t.Fatal("a trial observed filesystem state left by an earlier trial")
+	}
+	if env.git.resets != len(res.Trials) {
+		t.Errorf("worktree resets = %d, executed trials = %d", env.git.resets, len(res.Trials))
 	}
 }
 
@@ -483,6 +615,43 @@ func TestRunInstallFailureIsUnresolved(t *testing.T) {
 	}
 	if unresolved == 0 {
 		t.Error("expected at least one unresolved trial recorded")
+	}
+	if !res.MinimalityProven {
+		t.Error("unrelated unresolved trials must not invalidate a proven singleton result")
+	}
+}
+
+func TestRunRequiredUnresolvedNeighborMakesResultInconclusive(t *testing.T) {
+	env := newEnv(t, threeChangeRepo(), func(deps map[string]string) bool {
+		return deps["alpha"] == "1.1.0" && deps["beta"] == "3.2.0"
+	}, 1)
+	// The pair {alpha,beta} fails, but removing alpha leaves {beta}, which
+	// cannot be installed. The pair is therefore only the best-known set,
+	// not a proven 1-minimal result.
+	env.installer.failWhen = func(deps map[string]string) bool {
+		return deps["alpha"] == "1.0.0" &&
+			deps["beta"] == "3.2.0" &&
+			deps["gamma"] == "5.0.0"
+	}
+
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeInconclusive {
+		t.Fatalf("outcome = %q, want %q", res.Outcome, OutcomeInconclusive)
+	}
+	if got := minimalNames(res); ids(got) != "alpha,beta" {
+		t.Fatalf("best-known set = %v, want [alpha beta]", got)
+	}
+	if res.MinimalityProven {
+		t.Fatal("minimality reported as proven despite an unresolved required neighbor")
+	}
+	if res.UnresolvedTrials == 0 {
+		t.Fatal("unresolved trial count was not recorded")
+	}
+	if !strings.Contains(res.OutcomeDetail, "best-known") {
+		t.Errorf("outcome detail = %q, want best-known qualification", res.OutcomeDetail)
 	}
 }
 
@@ -667,6 +836,235 @@ func TestRunMemoizesRepeatedSubsets(t *testing.T) {
 		// every executed, resolvable trial corresponds to exactly one verify
 		t.Errorf("verifier calls = %d, trials = %d", env.verifier.calls, len(res.Trials))
 	}
+}
+
+func TestRunResumesCompletedTrialsFromCheckpoint(t *testing.T) {
+	store := &fakeCheckpointStore{}
+	ctx, cancel := context.WithCancel(context.Background())
+	first := newEnv(t, threeChangeRepo(), nil, 1)
+	first.eng.Progress = &recordingProgress{}
+	first.eng.Verifier = first.verifier
+	first.verifier.failWhen = func(deps map[string]string) bool {
+		if first.verifier.calls == 3 {
+			cancel()
+		}
+		return deps["beta"] == "3.2.0"
+	}
+	opts := baseOpts()
+	opts.Checkpoint = store
+	opts.CheckpointContext = "run-timeout=0s"
+
+	_, err := first.eng.Run(ctx, opts)
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("first run error = %v, want cancellation", err)
+	}
+	if store.checkpoint == nil || len(store.checkpoint.Trials) < 2 {
+		t.Fatalf("checkpoint = %+v, want completed trials", store.checkpoint)
+	}
+	savedTrials := len(store.checkpoint.Trials)
+
+	second := newEnv(t, threeChangeRepo(), func(deps map[string]string) bool {
+		return deps["beta"] == "3.2.0"
+	}, 1)
+	progress := &recordingProgress{}
+	second.eng.Progress = progress
+	opts.Resume = true
+	res, err := second.eng.Run(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeMinimalFound {
+		t.Fatalf("outcome = %q", res.Outcome)
+	}
+	if res.ResumedTrials != savedTrials {
+		t.Errorf("resumed trials = %d, want %d", res.ResumedTrials, savedTrials)
+	}
+	if second.verifier.calls >= len(res.Trials) {
+		t.Errorf("verifier calls = %d, total trials = %d; checkpoint was not reused",
+			second.verifier.calls, len(res.Trials))
+	}
+	if store.starts != 1 {
+		t.Errorf("checkpoint starts = %d, want 1", store.starts)
+	}
+	if store.clears != 1 || store.checkpoint != nil {
+		t.Errorf("completed checkpoint was not cleared: clears=%d checkpoint=%+v", store.clears, store.checkpoint)
+	}
+	if len(progress.trials) == 0 || progress.trials[0].number != savedTrials+1 {
+		t.Errorf("continued trial numbering = %+v, want first new trial %d", progress.trials, savedTrials+1)
+	}
+	if !containsString(progress.steps, "Resuming from checkpoint") {
+		t.Errorf("progress steps = %v, want resume notice", progress.steps)
+	}
+}
+
+func TestRunResumeRejectsMismatchedCheckpoint(t *testing.T) {
+	store := &fakeCheckpointStore{
+		checkpoint: &Checkpoint{
+			SchemaVersion: CheckpointSchemaVersion,
+			Fingerprint: CheckpointFingerprint{
+				BaseSHA:               "sha-base",
+				ToSHA:                 "sha-head",
+				PackageManager:        "npm",
+				PackageManagerVersion: "npm different-version",
+				Command:               []string{"npm", "test"},
+				Runs:                  3,
+				Changes: []string{
+					"dependencies:alpha",
+					"dependencies:beta",
+					"dependencies:gamma",
+				},
+				Context: "run-timeout=0s",
+			},
+			StartedAt: time.Now(),
+		},
+	}
+	env := newEnv(t, threeChangeRepo(), nil, 1)
+	opts := baseOpts()
+	opts.Checkpoint = store
+	opts.CheckpointContext = "run-timeout=0s"
+	opts.Resume = true
+
+	_, err := env.eng.Run(context.Background(), opts)
+	if err == nil || !strings.Contains(err.Error(), "checkpoint does not match") {
+		t.Fatalf("err = %v, want checkpoint mismatch", err)
+	}
+	if len(env.tempDirs) != 0 {
+		t.Fatal("mismatched checkpoint should be rejected before creating a worktree")
+	}
+}
+
+func TestRunReportsTrialPhasesAndElapsedTime(t *testing.T) {
+	env := newEnv(t, threeChangeRepo(), func(deps map[string]string) bool {
+		return deps["beta"] == "3.2.0"
+	}, 1)
+	progress := &recordingProgress{}
+	env.eng.Progress = progress
+
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(progress.trials) < len(res.Trials)*3 {
+		t.Fatalf("trial progress events = %d, want at least %d", len(progress.trials), len(res.Trials)*3)
+	}
+	phases := map[string]bool{}
+	for _, event := range progress.trials {
+		phases[event.phase] = true
+		if event.number < 1 || event.applied < 0 || event.total != len(res.Changes) {
+			t.Errorf("invalid trial progress event: %+v", event)
+		}
+	}
+	for _, phase := range []string{"preparing", "installing", "verifying", "pass", "fail"} {
+		if !phases[phase] {
+			t.Errorf("missing progress phase %q in %+v", phase, progress.trials)
+		}
+	}
+}
+
+func TestRunRecordsPhaseTimingsAndCleanupInCompletedWallTime(t *testing.T) {
+	git := threeChangeRepo()
+	env := newEnv(t, git, func(deps map[string]string) bool {
+		return deps["beta"] == "3.2.0"
+	}, 1)
+
+	current := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC)
+	advance := func(d time.Duration) { current = current.Add(d) }
+	env.eng.Now = func() time.Time { return current }
+	git.onReset = func() { advance(2 * time.Second) }
+	env.installer.onInstall = func(string) { advance(3 * time.Second) }
+	env.verifier.onVerify = func() { advance(5 * time.Second) }
+	git.onRemove = func() { advance(7 * time.Second) }
+
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Trials) == 0 {
+		t.Fatal("expected recorded trials")
+	}
+	for i, trial := range res.Trials {
+		if trial.PrepareDuration != 2*time.Second {
+			t.Errorf("trial %d prepare duration = %v, want 2s", i+1, trial.PrepareDuration)
+		}
+		if trial.InstallDuration != 3*time.Second {
+			t.Errorf("trial %d install duration = %v, want 3s", i+1, trial.InstallDuration)
+		}
+		if trial.VerifyDuration != 5*time.Second {
+			t.Errorf("trial %d verify duration = %v, want 5s", i+1, trial.VerifyDuration)
+		}
+		if trial.Duration != 10*time.Second {
+			t.Errorf("trial %d total duration = %v, want 10s", i+1, trial.Duration)
+		}
+	}
+	if res.CleanupDuration != 7*time.Second {
+		t.Errorf("cleanup duration = %v, want 7s", res.CleanupDuration)
+	}
+	wantWall := time.Duration(len(res.Trials))*10*time.Second + 7*time.Second
+	if got := res.FinishedAt.Sub(res.StartedAt); got != wantWall {
+		t.Errorf("completed wall time = %v, want %v", got, wantWall)
+	}
+}
+
+func TestRunInstallTimeoutIsDistinctAndCleansUp(t *testing.T) {
+	env := newEnv(t, threeChangeRepo(), nil, 1)
+	env.installer.waitForCancel = true
+	opts := baseOpts()
+	opts.InstallTimeout = 10 * time.Millisecond
+
+	_, err := env.eng.Run(context.Background(), opts)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want deadline exceeded", err)
+	}
+	if !strings.Contains(err.Error(), "dependency installation timed out after 10ms") {
+		t.Fatalf("err = %v, want install timeout detail", err)
+	}
+	if len(env.git.removed) != 1 {
+		t.Fatalf("removed worktrees = %d, want 1", len(env.git.removed))
+	}
+}
+
+func TestRunOverallTimeoutIsDistinctAndCleansUp(t *testing.T) {
+	env := newEnv(t, threeChangeRepo(), nil, 1)
+	env.installer.waitForCancel = true
+	opts := baseOpts()
+	opts.OverallTimeout = 10 * time.Millisecond
+
+	_, err := env.eng.Run(context.Background(), opts)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want deadline exceeded", err)
+	}
+	if !strings.Contains(err.Error(), "bisection timed out after 10ms") {
+		t.Fatalf("err = %v, want overall timeout detail", err)
+	}
+	if len(env.git.removed) != 1 {
+		t.Fatalf("removed worktrees = %d, want 1", len(env.git.removed))
+	}
+}
+
+func TestRunDoesNotMislabelParentDeadlineAsOverallTimeout(t *testing.T) {
+	env := newEnv(t, threeChangeRepo(), nil, 1)
+	env.installer.waitForCancel = true
+	opts := baseOpts()
+	opts.OverallTimeout = time.Hour
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := env.eng.Run(ctx, opts)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want deadline exceeded", err)
+	}
+	if strings.Contains(err.Error(), "bisection timed out after 1h0m0s") {
+		t.Fatalf("parent deadline mislabeled as configured overall timeout: %v", err)
+	}
+}
+
+func containsString(values []string, substring string) bool {
+	for _, value := range values {
+		if strings.Contains(value, substring) {
+			return true
+		}
+	}
+	return false
 }
 
 func countUnresolved(res *Result) int {

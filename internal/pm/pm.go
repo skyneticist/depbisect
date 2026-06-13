@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 
 	"github.com/skyneticist/depbisect/internal/execx"
 )
@@ -72,16 +73,33 @@ type Installer struct {
 	LookPath func(string) (string, error)
 }
 
-// CheckAvailable verifies the package manager binary is on PATH.
-func (i Installer) CheckAvailable() error {
+// Version verifies the executable is available and returns its reported version.
+func (i Installer) Version(ctx context.Context) (string, error) {
 	lookPath := i.LookPath
 	if lookPath == nil {
 		lookPath = exec.LookPath
 	}
-	if _, err := lookPath(string(i.Manager)); err != nil {
-		return fmt.Errorf("package manager %q not found on PATH: %w", i.Manager, err)
+	_, err := lookPath(string(i.Manager))
+	if err != nil {
+		return "", fmt.Errorf("package manager %q not found on PATH: %w", i.Manager, err)
 	}
-	return nil
+	res, err := i.Runner.Run(ctx, execx.Cmd{
+		Name:              string(i.Manager),
+		Args:              []string{"--version"},
+		AllowTrustedBatch: true,
+	})
+	if err != nil {
+		return "", fmt.Errorf("inspect package manager %q version: %w", i.Manager, err)
+	}
+	if res.ExitCode != 0 {
+		return "", fmt.Errorf("inspect package manager %q version: exit %d: %s",
+			i.Manager, res.ExitCode, firstNonEmptyLine(res.Stderr))
+	}
+	version := firstNonEmptyLine(res.Stdout)
+	if version == "no output" {
+		return "", fmt.Errorf("inspect package manager %q version: command produced no output", i.Manager)
+	}
+	return fmt.Sprintf("%s %s", i.Manager, version), nil
 }
 
 // Install runs the package manager in dir. A nonzero exit is reported via
@@ -94,4 +112,13 @@ func (i Installer) Install(ctx context.Context, dir string, stream io.Writer) (e
 		AllowTrustedBatch: true,
 		Stream:            stream,
 	})
+}
+
+func firstNonEmptyLine(data []byte) string {
+	for _, line := range strings.Split(string(data), "\n") {
+		if value := strings.TrimSpace(line); value != "" {
+			return value
+		}
+	}
+	return "no output"
 }

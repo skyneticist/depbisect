@@ -1,7 +1,8 @@
 // Package ddmin implements Zeller's ddmin delta-debugging algorithm.
 //
 // The implementation is deterministic and free of I/O: callers supply a Test
-// function and receive a 1-minimal failing subset. All candidate subsets
+// function and receive a reduced failing subset. When every required
+// neighboring test resolves, the result is 1-minimal. All candidate subsets
 // preserve the relative order of the input slice.
 package ddmin
 
@@ -45,9 +46,11 @@ type Stats struct {
 	Tests int
 }
 
-// Minimize returns a 1-minimal subset of items that still satisfies
+// Minimize returns a reduced subset of items that still satisfies
 // Test(subset) == Fail, assuming Test(items) == Fail. Callers are expected to
 // have verified that precondition; Minimize does not re-test the full input.
+// If Test returns Unresolved for a required neighboring subset, callers must
+// not claim that the result is proven 1-minimal without a separate check.
 //
 // The returned slice preserves the relative order of items. Minimize is
 // deterministic: identical inputs and Test behavior produce identical results
