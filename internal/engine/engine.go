@@ -664,6 +664,11 @@ func makeCheckpointFingerprint(baseSHA, toSHA string, manager pm.Manager, manage
 	}
 }
 
+// validateCheckpoint rejects a loaded checkpoint that does not match the
+// current run. It verifies the schema version and fingerprint, then confirms
+// every recorded trial has a valid outcome, refers only to known changes, and
+// applies a distinct subset. This guarantees resumed state is safe to reuse
+// without re-testing.
 func validateCheckpoint(cp *Checkpoint, want CheckpointFingerprint) error {
 	if cp == nil {
 		return fmt.Errorf("checkpoint is empty")

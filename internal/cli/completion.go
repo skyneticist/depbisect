@@ -66,6 +66,8 @@ _depbisect() {
 _depbisect "$@"
 `
 
+// completionMain writes the shell completion script for the requested shell to
+// stdout. It supports "bash" and "zsh".
 func completionMain(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
 		fmt.Fprintln(stderr, "depbisect: usage: depbisect completion bash|zsh")
