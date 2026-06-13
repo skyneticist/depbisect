@@ -19,10 +19,13 @@ go build ./cmd/depbisect
 Expected output ends with:
 
 ```text
-Minimal failing set:
-  leftpad file:.../pkgs/leftpad-1.0.0 -> file:.../pkgs/leftpad-2.0.0
+      Result Minimal breaking dependency set found
 
-Reproduced 3/3 times
+Breaking dependencies
+  - leftpad file:.../pkgs/leftpad-1.0.0 -> file:.../pkgs/leftpad-2.0.0
+
+    Evidence 3/3 failing runs
+     Outcome minimal-set-found
 ```
 
 Useful variations:
@@ -63,14 +66,14 @@ go build ./cmd/depbisect
 Expected output includes:
 
 ```text
-Analyzed 12 dependency changes
+     Changes 12 analyzed
 
-Minimal failing set:
-  cache-reader file:.../cache-reader-1.0.0 -> file:.../cache-reader-2.0.0
-  cache-writer file:.../cache-writer-1.0.0 -> file:.../cache-writer-2.0.0
-  wire-decoder file:.../wire-decoder-1.0.0 -> file:.../wire-decoder-2.0.0
-  wire-encoder file:.../wire-encoder-1.0.0 -> file:.../wire-encoder-2.0.0
-  wire-transport file:.../wire-transport-1.0.0 -> file:.../wire-transport-2.0.0
+Breaking dependencies
+  - cache-reader file:.../cache-reader-1.0.0 -> file:.../cache-reader-2.0.0
+  - cache-writer file:.../cache-writer-1.0.0 -> file:.../cache-writer-2.0.0
+  - wire-decoder file:.../wire-decoder-1.0.0 -> file:.../wire-decoder-2.0.0
+  - wire-encoder file:.../wire-encoder-1.0.0 -> file:.../wire-encoder-2.0.0
+  - wire-transport file:.../wire-transport-1.0.0 -> file:.../wire-transport-2.0.0
 ```
 
 Re-run `make-demo-complex.sh` to reset the generated repository.

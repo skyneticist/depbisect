@@ -10,6 +10,15 @@ All notable changes to this project are documented here. The format follows
 
 - Windows support, including native CI coverage, npm/pnpm batch-shim handling,
   prompt subprocess cancellation, and amd64/arm64 release archives.
+- `--quiet` to suppress progress while retaining the final result.
+
+### Changed
+
+- Terminal output now uses aligned status labels, width-aware TTY live
+  progress, explicit baseline expectations, readable result metadata, and
+  wrapped diagnostics. Real terminal detection avoids sending live redraw
+  sequences to character devices such as `/dev/null` or Windows `NUL`. Dry
+  runs list the dependency changes they would bisect.
 
 ## [0.1.0] - 2026-06-11
 

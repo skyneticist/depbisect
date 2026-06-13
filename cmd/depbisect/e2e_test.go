@@ -295,6 +295,9 @@ func assertTmpEmpty(t *testing.T, tmpDir string) {
 const failIfLeftpad2 = `const p=require(process.cwd()+"/package.json");process.exit((p.dependencies||{}).leftpad==="2.0.0"?1:0);`
 
 func TestE2EFindsCulpritNpm(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("CLICOLOR", "")
+	t.Setenv("CLICOLOR_FORCE", "")
 	node := requireTools(t)
 	r := initRepo(t, "npm")
 	stubDir, logPath := stubPM(t)
@@ -308,10 +311,14 @@ func TestE2EFindsCulpritNpm(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	for _, want := range []string{"Analyzed 3 dependency changes", "Minimal failing set:", "leftpad 1.0.0 -> 2.0.0", "Reproduced 3/3 times"} {
+	for _, want := range []string{"Changes 3 analyzed", "Breaking dependencies", "leftpad 1.0.0 -> 2.0.0", "Evidence 3/3 failing runs"} {
 		if !strings.Contains(res.stdout, want) {
 			t.Errorf("stdout missing %q:\n%s", want, res.stdout)
 		}
+	}
+	if strings.ContainsAny(res.stdout+res.stderr, "\r\x1b") {
+		t.Errorf("redirected output contains terminal control sequences:\nstdout:\n%s\nstderr:\n%s",
+			res.stdout, res.stderr)
 	}
 
 	// JSON report is valid and identifies the culprit.
@@ -390,8 +397,19 @@ func TestE2ENotReproduced(t *testing.T) {
 	if res.code != 2 {
 		t.Fatalf("exit = %d, want 2\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	if !strings.Contains(res.stdout, "not-reproduced") {
-		t.Errorf("stdout:\n%s", res.stdout)
+	for _, want := range []string{
+		"Result No breaking dependency update reproduced the failure",
+		"Outcome not-reproduced",
+		"Changes 3 analyzed",
+		"Trials 2",
+		"passed 1/1 runs with all dependency updates applied",
+	} {
+		if !strings.Contains(res.stdout, want) {
+			t.Errorf("stdout missing %q:\n%s", want, res.stdout)
+		}
+	}
+	if compact := strings.Join(strings.Fields(res.stdout), " "); !strings.Contains(compact, "no bisection was needed") {
+		t.Errorf("stdout should explain that no bisection ran:\n%s", res.stdout)
 	}
 	assertTmpEmpty(t, tmpDir)
 }
@@ -428,9 +446,32 @@ func TestE2ENoChanges(t *testing.T) {
 	if res.code != 5 {
 		t.Fatalf("exit = %d, want 5\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
+	if !strings.Contains(res.stdout, "Result No dependency changes to bisect") {
+		t.Errorf("stdout:\n%s", res.stdout)
+	}
 	// No installs should have happened.
 	if log, _ := os.ReadFile(logPath); len(log) != 0 {
 		t.Errorf("unexpected package manager calls:\n%s", log)
+	}
+}
+
+func TestE2EQuietSuppressesProgress(t *testing.T) {
+	node := requireTools(t)
+	r := initRepo(t, "npm")
+	stubDir, logPath := stubPM(t)
+	tmpDir, outDir := t.TempDir(), t.TempDir()
+
+	res := runBin(t, r, outDir, tmpDir, stubDir, logPath,
+		"run", "--repo", r.dir, "--base", r.first, "--quiet", "--no-reports", "--",
+		node, "-e", failIfLeftpad2)
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	if res.stderr != "" {
+		t.Fatalf("--quiet stderr should be empty:\n%s", res.stderr)
+	}
+	if !strings.Contains(res.stdout, "Result Minimal breaking dependency set found") {
+		t.Errorf("quiet output must retain the final result:\n%s", res.stdout)
 	}
 }
 
@@ -445,6 +486,11 @@ func TestE2EDryRun(t *testing.T) {
 		node, "-e", failIfLeftpad2)
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	for _, want := range []string{"Dependency changes", "alpha", "leftpad", "Outcome dry-run"} {
+		if !strings.Contains(res.stdout, want) {
+			t.Errorf("dry-run stdout missing %q:\n%s", want, res.stdout)
+		}
 	}
 	if log, _ := os.ReadFile(logPath); len(log) != 0 {
 		t.Errorf("dry run must not install:\n%s", log)
@@ -492,7 +538,7 @@ func TestE2EKeepWorktrees(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
 	}
-	if !strings.Contains(res.stdout, "Worktree kept at:") {
+	if !strings.Contains(res.stdout, "Worktree ") {
 		t.Errorf("stdout:\n%s", res.stdout)
 	}
 	// The kept worktree must exist under our TMPDIR.

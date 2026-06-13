@@ -4,25 +4,32 @@
 
 ```text
 $ depbisect run --base origin/main -- pnpm test
-==> Comparing dependencies: origin/main (a1b2c3d4e5f6) -> HEAD (f6e5d4c3b2a1)
-==> Analyzed 43 dependency changes
-==> Baseline 1/2: all updates reverted (must pass)
---> Trial 1 [baseline-old, 0/43 changes]: preparing
---> Trial 1 [baseline-old, 0/43 changes]: installing after 0.8s
---> Trial 1 [baseline-old, 0/43 changes]: verifying after 8.4s
---> Trial 1 [baseline-old, 0/43 changes]: pass in 12.1s
-==> Baseline 2/2: all updates applied (must fail)
-==> Bisecting 43 changes (ddmin)
-==> Minimal failing set: 1 of 43 changes
+     Compare origin/main (a1b2c3d4e5f6) -> HEAD (f6e5d4c3b2a1)
+     Changes 43 direct dependency changes
+    Baseline 1/2 | without updates (expect PASS)
+     Trial 1 baseline without updates | 0/43 changes | preparing
+    EXPECTED trial 1 | baseline without updates | 0/43 changes | PASS | 12.1s
+    Baseline 2/2 | with all updates (expect FAIL)
+     Trial 2 baseline with all updates | 43/43 changes | preparing
+    EXPECTED trial 2 | baseline with all updates | 43/43 changes | FAIL | 13.4s
+      Bisect 43 changes with ddmin
+         ...
+    Complete minimal failing set contains 1 of 43 changes
 
-Analyzed 43 dependency changes
+      Result Minimal breaking dependency set found
 
-Minimal failing set:
-  @acme/parser 3.8.1 -> 3.9.0
+Breaking dependencies
+  - @acme/parser 3.8.1 -> 3.9.0
 
-Reproduced 3/3 times
-
-Report: depbisect-report.md (JSON: depbisect-report.json)
+     Command pnpm test
+     Manager pnpm 9.15.0
+    Evidence 3/3 failing runs
+     Changes 43 analyzed
+      Trials 17
+    Duration 2m14.3s
+     Outcome minimal-set-found
+      Report depbisect-report.md
+        JSON depbisect-report.json
 ```
 
 ## Install
@@ -44,6 +51,8 @@ depbisect run --base origin/main --dry-run -- npm test   # preview the changes
 depbisect run --base origin/main --runs 3 -- npm test    # bisect
 # If interrupted, rerun the same command with --resume.
 depbisect run --base origin/main --runs 3 --resume -- npm test
+# Final result only, useful in quieter CI jobs:
+depbisect run --base origin/main --quiet -- npm test
 ```
 
 The command after `--` is executed verbatim — no shell. For shell features:
@@ -73,6 +82,15 @@ removed after a completed run and retained after interruption or runtime
 failure. Re-run the same command with `--resume` to continue. Use
 `--checkpoint <path>` to choose another location or `--checkpoint ""` to
 disable checkpointing.
+
+Progress adapts to its destination: terminals get a width-aware, in-place
+active trial, while redirected output remains plain and line-oriented for CI
+logs.
+`--quiet` suppresses progress and keeps the final result; `--verbose` shows
+every prepare/install/verify phase and streams subprocess output. `NO_COLOR`
+and `CLICOLOR=0` disable color, while `CLICOLOR_FORCE=1` enables color when
+redirected. For automation, consume `depbisect-report.json` rather than
+parsing the human-oriented terminal display.
 
 Use `--run-timeout` to bound each verification command,
 `--install-timeout` to bound each package-manager install, and
@@ -113,6 +131,11 @@ See [docs/limitations.md](docs/limitations.md) for the full list, [docs/how-it-w
 | 3 | command fails even with all updates reverted |
 | 4 | inconclusive: flaky verification or minimality could not be proven |
 | 5 | no direct dependency changes between the revisions |
+
+Exit code `2` is the clean "nothing broke here" result: the verification
+command passed with every dependency update applied, so there was no
+dependency-related failure to bisect. Exit code `5` means the revisions did
+not contain any direct dependency changes in the first place.
 
 ## GitHub Action
 
