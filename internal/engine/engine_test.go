@@ -313,8 +313,8 @@ type recordingProgress struct {
 	trials []trialProgressEvent
 }
 
-func (p *recordingProgress) Step(format string, args ...any) {
-	p.steps = append(p.steps, fmt.Sprintf(format, args...))
+func (p *recordingProgress) Step(label, format string, args ...any) {
+	p.steps = append(p.steps, label+" "+fmt.Sprintf(format, args...))
 }
 
 func (p *recordingProgress) Detail(string, ...any) {}
@@ -892,7 +892,7 @@ func TestRunResumesCompletedTrialsFromCheckpoint(t *testing.T) {
 	if len(progress.trials) == 0 || progress.trials[0].number != savedTrials+1 {
 		t.Errorf("continued trial numbering = %+v, want first new trial %d", progress.trials, savedTrials+1)
 	}
-	if !containsString(progress.steps, "Resuming from checkpoint") {
+	if !containsString(progress.steps, "Resume") {
 		t.Errorf("progress steps = %v, want resume notice", progress.steps)
 	}
 }

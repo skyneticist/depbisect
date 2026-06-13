@@ -66,6 +66,7 @@ Flags for run:
   --resume              resume completed trials from --checkpoint
   --keep-worktrees      keep the temporary worktree for inspection
   --dry-run             show detected changes and plan; run nothing
+  --quiet               suppress progress; print only the final result
   --verbose             stream subprocess output and extra progress detail
 
 Exit codes:
@@ -118,6 +119,7 @@ type runOptions struct {
 	resume         bool
 	keepWorktrees  bool
 	dryRun         bool
+	quiet          bool
 	verbose        bool
 	command        []string
 }
@@ -155,6 +157,7 @@ func parseRunArgs(args []string) (*runOptions, error) {
 	fs.BoolVar(&opts.resume, "resume", false, "")
 	fs.BoolVar(&opts.keepWorktrees, "keep-worktrees", false, "")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "")
+	fs.BoolVar(&opts.quiet, "quiet", false, "")
 	fs.BoolVar(&opts.verbose, "verbose", false, "")
 	if err := fs.Parse(flagArgs); err != nil {
 		return nil, err
@@ -176,6 +179,9 @@ func parseRunArgs(args []string) (*runOptions, error) {
 	}
 	if opts.overallTimeout < 0 {
 		return nil, errors.New("--overall-timeout must not be negative")
+	}
+	if opts.quiet && opts.verbose {
+		return nil, errors.New("--quiet and --verbose cannot be used together")
 	}
 	if opts.resume && opts.checkpoint == "" {
 		return nil, errors.New("--resume requires a non-empty --checkpoint path")
@@ -215,6 +221,11 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 	if opts.checkpoint != "" && !opts.dryRun {
 		checkpointStore = checkpoint.NewFileStore(opts.checkpoint)
 	}
+	progressWriter := stderr
+	if opts.quiet {
+		progressWriter = io.Discard
+	}
+	progressOutput := newProgress(progressWriter, opts.verbose)
 	eng := &engine.Engine{
 		Git: git,
 		NewInstaller: func(m pm.Manager) engine.Installer {
@@ -227,7 +238,7 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 			Timeout: opts.runTimeout,
 			Stream:  stream,
 		}},
-		Progress: newProgress(stderr, opts.verbose),
+		Progress: progressOutput,
 	}
 
 	res, err := eng.Run(ctx, engine.Options{
@@ -247,6 +258,7 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 		OverallTimeout: opts.overallTimeout,
 	})
 	if err != nil {
+		progressOutput.clearActiveTrial()
 		if errors.Is(err, context.Canceled) {
 			fmt.Fprint(stderr, "depbisect: interrupted; temporary worktrees were cleaned up")
 		} else {

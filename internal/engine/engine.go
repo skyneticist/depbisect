@@ -47,8 +47,8 @@ type Verifier interface {
 
 // Progress receives human-oriented status updates during a run.
 type Progress interface {
-	// Step announces a major phase.
-	Step(format string, args ...any)
+	// Step announces a labeled major phase.
+	Step(label, format string, args ...any)
 	// Detail reports fine-grained progress (shown in verbose mode).
 	Detail(format string, args ...any)
 	// Trial reports the lifecycle of one newly executed trial.
@@ -57,7 +57,7 @@ type Progress interface {
 
 type nopProgress struct{}
 
-func (nopProgress) Step(string, ...any)                                {}
+func (nopProgress) Step(string, string, ...any)                        {}
 func (nopProgress) Detail(string, ...any)                              {}
 func (nopProgress) Trial(int, string, int, int, string, time.Duration) {}
 
@@ -260,7 +260,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 			opts.BaseRev, opts.ToRev, shortSHA(baseSHA)))
 	}
 	res.BaseSHA, res.ToSHA = baseSHA, toSHA
-	progress.Step("Comparing dependencies: %s (%s) -> %s (%s)",
+	progress.Step("Compare", "%s (%s) -> %s (%s)",
 		opts.BaseRev, shortSHA(baseSHA), opts.ToRev, shortSHA(toSHA))
 
 	basePkg, err := e.readManifest(ctx, baseSHA, opts.BaseRev)
@@ -312,7 +312,8 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 				"if the culprit is among them, results may be incomplete.",
 			pluralize(n, "dependency", "dependencies"), lockfileOnlyNames(res.LockfileOnly)))
 	}
-	progress.Step("Analyzed %d dependency changes", len(changes))
+	progress.Step("Changes", "%s",
+		pluralize(len(changes), "direct dependency change", "direct dependency changes"))
 
 	e.warnDirty(ctx, manager, res)
 
@@ -360,7 +361,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 			}
 			res.ResumedTrials = len(cp.Trials)
 			trialNumber = len(cp.Trials)
-			progress.Step("Resuming from checkpoint with %d completed trials", len(cp.Trials))
+			progress.Step("Resume", "%d completed trials restored from checkpoint", len(cp.Trials))
 		} else {
 			if err := opts.Checkpoint.Start(Checkpoint{
 				SchemaVersion: CheckpointSchemaVersion,
@@ -484,7 +485,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	// Phase 6: baselines.
-	progress.Step("Baseline 1/2: all updates reverted (must pass)")
+	progress.Step("Baseline", "1/2 | without updates (expect PASS)")
 	oldTrial, err := runSubset(nil, "baseline-old", false)
 	if err != nil {
 		return fail(err)
@@ -510,7 +511,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		return finish()
 	}
 
-	progress.Step("Baseline 2/2: all updates applied (must fail)")
+	progress.Step("Baseline", "2/2 | with all updates (expect FAIL)")
 	newTrial, err := runSubset(changes, "baseline-new", false)
 	if err != nil {
 		return fail(err)
@@ -521,8 +522,9 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	if newTrial.Failures == 0 {
 		res.Outcome = OutcomeNotReproduced
 		res.OutcomeDetail = fmt.Sprintf(
-			"the command passed %d/%d runs with all dependency updates applied; "+
-				"the failure does not reproduce in a clean worktree at %s",
+			"the verification command passed %d/%d runs with all dependency updates applied; "+
+				"no bisection was needed because the reported failure does not reproduce "+
+				"in a clean worktree at %s",
 			newTrial.RunsExecuted, newTrial.RunsExecuted, opts.ToRev)
 		res.OutcomeDetail += lockfileOnlyHint(res)
 		return finish()
@@ -538,7 +540,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	// Phase 7: delta debugging.
-	progress.Step("Bisecting %d changes (ddmin)", len(changes))
+	progress.Step("Bisect", "%d changes with ddmin", len(changes))
 	minimal, _, err := ddmin.Minimize(changes, func(subset []manifest.Change) (ddmin.Outcome, error) {
 		trial, err := runSubset(subset, "candidate", true)
 		if err != nil {
@@ -608,7 +610,8 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		res.Outcome = OutcomeMinimalFound
 		res.OutcomeDetail = fmt.Sprintf("minimal failing set has %d of %d changes after %d candidate tests",
 			len(bestKnown), len(changes), candidateTests)
-		progress.Step("Minimal failing set: %d of %d changes", len(bestKnown), len(changes))
+		progress.Step("Complete", "minimal failing set contains %d of %d changes",
+			len(bestKnown), len(changes))
 	} else {
 		res.Outcome = OutcomeInconclusive
 		res.OutcomeDetail = fmt.Sprintf(
@@ -617,7 +620,8 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		res.Diagnostics = append(res.Diagnostics, fmt.Sprintf(
 			"minimality checks were unresolved or flaky when removing: %s",
 			strings.Join(uncertainNeighbors, ", ")))
-		progress.Step("Best-known failing set: %d of %d changes (minimality not proven)", len(bestKnown), len(changes))
+		progress.Step("Complete", "best-known failing set contains %d of %d changes; minimality not proven",
+			len(bestKnown), len(changes))
 	}
 	return finish()
 }

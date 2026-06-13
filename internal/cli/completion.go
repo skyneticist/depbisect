@@ -11,7 +11,7 @@ _depbisect() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     case "${COMP_WORDS[1]}" in
         run)
-            COMPREPLY=( $(compgen -W "--base --to --repo --runs --run-timeout --install-timeout --overall-timeout --pm --report-md --report-json --no-reports --checkpoint --resume --keep-worktrees --dry-run --verbose --" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--base --to --repo --runs --run-timeout --install-timeout --overall-timeout --pm --report-md --report-json --no-reports --checkpoint --resume --keep-worktrees --dry-run --quiet --verbose --" -- "$cur") )
             ;;
         completion)
             COMPREPLY=( $(compgen -W "bash zsh" -- "$cur") )
@@ -55,6 +55,7 @@ _depbisect() {
                 '--resume[resume completed trials from checkpoint]' \
                 '--keep-worktrees[keep temporary worktree]' \
                 '--dry-run[plan only]' \
+                '--quiet[suppress progress and print only the final result]' \
                 '--verbose[verbose output]'
             ;;
         completion)
