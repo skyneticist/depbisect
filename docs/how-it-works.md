@@ -7,8 +7,9 @@
 3. **Read lockfiles.** `package-lock.json` (v1–v3) or `pnpm-lock.yaml` (v5/v6/v9) supplies exact resolved versions for display, and exposes *lockfile-only* changes — dependencies whose spec is unchanged but whose resolution moved. These cannot be bisected (see below) and are reported as diagnostics.
 4. **Create an isolated worktree.** `git worktree add --detach` checks out `--to` in a private temporary directory. The user's checkout is never touched.
 5. **Verify baselines.** With all updates reverted, the command must pass every run; with all updates applied, it must fail every run. Any other combination ends the run with a specific outcome (`fails-without-updates`, `not-reproduced`, or `inconclusive` for flaky behavior) instead of producing a bogus answer.
-6. **Delta-debug (ddmin).** Candidate subsets of the updates are applied by rewriting the worktree's `package.json` (structured edit, never regex), installing with npm/pnpm, and re-running the command. ddmin shrinks the failing set until it is 1-minimal: removing any single element makes the command pass.
-7. **Report.** Results go to the terminal, `depbisect-report.md`, and a schema-stable `depbisect-report.json`.
+6. **Delta-debug (ddmin).** Before every uncached trial, the owned worktree is reset to `--to` and all untracked and ignored files are removed. Candidate subsets are then applied by rewriting `package.json` (structured edit, never regex), installing with npm/pnpm, and re-running the command.
+7. **Certify minimality.** Every one-change removal from the returned set is tested. The result is called 1-minimal only when all of those configurations resolve and pass. Otherwise the outcome is `inconclusive` with a best-known failing set.
+8. **Report.** Results go to the terminal, `depbisect-report.md`, and a schema-stable `depbisect-report.json`. Each completed trial records preparation, installation, verification, and total wall time; the run summary also records cleanup and stamps completion after cleanup finishes.
 
 ## Candidate semantics
 
@@ -22,9 +23,17 @@ A candidate is "the `--to` source tree, with dependency specs reverted to their 
 - During bisection, the first passing run short-circuits the remaining runs (it already refutes "fails every run").
 - Mixed pass/fail results are treated as "did not reproduce" and surfaced in diagnostics; flaky baselines abort the run as `inconclusive`.
 
+## Timeouts
+
+`--run-timeout` applies to each verification process, `--install-timeout`
+applies to each package-manager install, and `--overall-timeout` applies to
+the complete bisection. The first two are independent per-operation budgets;
+the overall deadline can interrupt any phase. Worktree cleanup uses a separate
+two-minute context so it is still attempted after cancellation or timeout.
+
 ## Determinism
 
-The ddmin core is pure and deterministic; identical test outcomes produce identical bisection paths. Subset outcomes are memoized, so no configuration is installed or verified twice.
+The ddmin core is pure and deterministic; identical test outcomes produce identical bisection paths. Subset outcomes are memoized, so no configuration is installed or verified twice. Completed trials are also appended to a checkpoint. `--resume` validates the revisions, dependency set, package manager and its reported version, command, run count, and all timeout settings before restoring that memoized state.
 
 ## Why lockfile-only changes cannot be bisected
 

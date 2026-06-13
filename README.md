@@ -7,6 +7,10 @@ $ depbisect run --base origin/main -- pnpm test
 ==> Comparing dependencies: origin/main (a1b2c3d4e5f6) -> HEAD (f6e5d4c3b2a1)
 ==> Analyzed 43 dependency changes
 ==> Baseline 1/2: all updates reverted (must pass)
+--> Trial 1 [baseline-old, 0/43 changes]: preparing
+--> Trial 1 [baseline-old, 0/43 changes]: installing after 0.8s
+--> Trial 1 [baseline-old, 0/43 changes]: verifying after 8.4s
+--> Trial 1 [baseline-old, 0/43 changes]: pass in 12.1s
 ==> Baseline 2/2: all updates applied (must fail)
 ==> Bisecting 43 changes (ddmin)
 ==> Minimal failing set: 1 of 43 changes
@@ -38,6 +42,8 @@ shasum -c --ignore-missing checksums.txt
 cd your-repo                                   # tests fail since a deps bump
 depbisect run --base origin/main --dry-run -- npm test   # preview the changes
 depbisect run --base origin/main --runs 3 -- npm test    # bisect
+# If interrupted, rerun the same command with --resume.
+depbisect run --base origin/main --runs 3 --resume -- npm test
 ```
 
 The command after `--` is executed verbatim — no shell. For shell features:
@@ -60,12 +66,29 @@ Workspaces (npm or pnpm) are not supported yet; DepBisect exits with a clear err
 
 ## How it works
 
-DepBisect diffs the direct dependencies declared in `package.json` between `--base` and `--to` (default `HEAD`). It checks out `--to` in a temporary Git worktree and confirms two baselines: the command passes with every update reverted and fails with every update applied. It then runs the ddmin delta-debugging algorithm, repeatedly installing candidate subsets of the updates and re-running your command, to shrink the failing set. The result is 1-minimal: removing any single update from it makes the command pass. `--runs N` repeats each verification to keep flaky tests from corrupting the result.
+DepBisect diffs the direct dependencies declared in `package.json` between `--base` and `--to` (default `HEAD`). It checks out `--to` in a temporary Git worktree and confirms two baselines: the command passes with every update reverted and fails with every update applied. It then runs the ddmin delta-debugging algorithm, repeatedly resetting the owned worktree, installing candidate subsets of the updates, and re-running your command. A final one-change-removal pass proves that the result is 1-minimal. If a required neighboring configuration cannot be installed or is flaky, DepBisect reports an inconclusive best-known set instead of overstating certainty. `--runs N` repeats each verification to keep flaky tests from corrupting the result.
+
+Completed trials are appended to `.depbisect-checkpoint.jsonl`. The file is
+removed after a completed run and retained after interruption or runtime
+failure. Re-run the same command with `--resume` to continue. Use
+`--checkpoint <path>` to choose another location or `--checkpoint ""` to
+disable checkpointing.
+
+Use `--run-timeout` to bound each verification command,
+`--install-timeout` to bound each package-manager install, and
+`--overall-timeout` to bound the complete bisection. All accept Go duration
+values such as `90s`, `15m`, or `2h`; zero leaves that deadline disabled.
+Cleanup gets its own bounded context, so an overall timeout still attempts to
+remove the temporary worktree. Reports break completed trials into preparation,
+installation, and verification time and include final cleanup in completed
+wall time.
 
 ## Safety guarantees
 
 - Your checkout is never modified; all installs happen in a DepBisect-owned temporary worktree.
-- No destructive Git commands; the worktree is removed (and pruned) afterwards, even on Ctrl-C.
+- `git reset --hard` and `git clean -ffdx` run only inside the temporary
+  worktree owned by DepBisect, never in your checkout.
+- The worktree is removed (and pruned) afterwards, even on Ctrl-C.
 - Command arguments are preserved exactly; no shell evaluation unless you invoke one.
 - Reports never contain environment variables or captured command output.
 
@@ -88,7 +111,7 @@ See [docs/limitations.md](docs/limitations.md) for the full list, [docs/how-it-w
 | 1 | usage or runtime error |
 | 2 | failure did not reproduce with all updates applied |
 | 3 | command fails even with all updates reverted |
-| 4 | verification command too flaky to bisect |
+| 4 | inconclusive: flaky verification or minimality could not be proven |
 | 5 | no direct dependency changes between the revisions |
 
 ## GitHub Action
@@ -106,12 +129,18 @@ jobs:
           base: ${{ github.event.pull_request.base.sha }}
           command: npm test       # run through bash -c by the action
           runs: "3"
+          install-timeout: 15m
+          overall-timeout: 1h
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: depbisect-report
           path: depbisect-report.*
 ```
+
+By default the action builds the exact DepBisect source bundled with the
+selected action ref. Set its `version` input to an explicit release tag only
+when intentionally testing a different CLI release.
 
 ## Contributing & license
 

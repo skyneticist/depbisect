@@ -7,10 +7,16 @@
 | Base | `origin/main` (`111111111111`) |
 | Target | `HEAD` (`222222222222`) |
 | Package manager | npm |
+| Package manager version | npm 10.8.2 |
 | Command | `npm test -- --grep "parser suite"` |
 | Runs per candidate | 3 |
 | Started | 2026-06-01T10:00:00Z |
-| Duration | 1m1s |
+| Finished | 2026-06-01T10:01:01Z |
+| Completed wall time | 1m1s |
+| Trial preparation | 4s |
+| Dependency installation | 28s |
+| Verification | 16s |
+| Cleanup | 4s |
 | Tool | depbisect 1.2.3 |
 
 ## Minimal failing set
@@ -39,10 +45,10 @@ Reproduced 3/3 times.
 
 ## Trials (4)
 
-| # | Role | Applied changes | Outcome | Failed/Runs | Duration |
-|---|---|---|---|---|---|
-| 1 | baseline-old | none (all reverted) | pass | 0/3 | 12s |
-| 2 | baseline-new | dependencies:alpha, dependencies:beta, devDependencies:tool | fail | 3/3 | 14s |
-| 3 | candidate | dependencies:alpha | pass | 0/1 | 9s |
-| 4 | candidate | dependencies:beta | fail | 3/3 | 13s |
+| # | Role | Applied changes | Outcome | Failed/Runs | Prepare | Install | Verify | Total |
+|---|---|---|---|---|---|---|---|---|
+| 1 | baseline-old | none (all reverted) | pass | 0/3 | 1s | 7s | 4s | 12s |
+| 2 | baseline-new | dependencies:alpha, dependencies:beta, devDependencies:tool | fail | 3/3 | 1s | 8s | 5s | 14s |
+| 3 | candidate | dependencies:alpha | pass | 0/1 | 1s | 6s | 2s | 9s |
+| 4 | candidate | dependencies:beta | fail | 3/3 | 1s | 7s | 5s | 13s |
 

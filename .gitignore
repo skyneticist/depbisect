@@ -3,5 +3,5 @@
 depbisect-report.md
 depbisect-report.json
 .claude
-
+.cache/
 

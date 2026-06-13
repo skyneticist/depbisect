@@ -11,7 +11,7 @@ _depbisect() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     case "${COMP_WORDS[1]}" in
         run)
-            COMPREPLY=( $(compgen -W "--base --to --repo --runs --run-timeout --pm --report-md --report-json --no-reports --keep-worktrees --dry-run --verbose --" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--base --to --repo --runs --run-timeout --install-timeout --overall-timeout --pm --report-md --report-json --no-reports --checkpoint --resume --keep-worktrees --dry-run --verbose --" -- "$cur") )
             ;;
         completion)
             COMPREPLY=( $(compgen -W "bash zsh" -- "$cur") )
@@ -45,10 +45,14 @@ _depbisect() {
                 '--repo[repository path]:path:_directories' \
                 '--runs[runs per candidate]:n:' \
                 '--run-timeout[timeout per run]:duration:' \
+                '--install-timeout[timeout per dependency install]:duration:' \
+                '--overall-timeout[timeout for the complete bisection]:duration:' \
                 '--pm[package manager]:pm:(npm pnpm)' \
                 '--report-md[markdown report path]:path:_files' \
                 '--report-json[json report path]:path:_files' \
                 '--no-reports[write no reports]' \
+                '--checkpoint[resumable checkpoint path]:path:_files' \
+                '--resume[resume completed trials from checkpoint]' \
                 '--keep-worktrees[keep temporary worktree]' \
                 '--dry-run[plan only]' \
                 '--verbose[verbose output]'

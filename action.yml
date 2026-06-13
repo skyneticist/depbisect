@@ -32,10 +32,20 @@ inputs:
     description: Timeout per verification run (Go duration, e.g. 10m).
     required: false
     default: "0s"
-  version:
-    description: depbisect version to install (a tag like v0.1.0, or latest).
+  install-timeout:
+    description: Timeout per dependency install (Go duration, e.g. 15m).
     required: false
-    default: latest
+    default: "0s"
+  overall-timeout:
+    description: Timeout for the complete bisection (Go duration, e.g. 1h).
+    required: false
+    default: "0s"
+  version:
+    description: >-
+      depbisect version to install. "source" builds the exact source bundled
+      with this action; a tag like v0.1.0 installs that release.
+    required: false
+    default: source
   working-directory:
     description: Repository directory to operate on.
     required: false
@@ -61,7 +71,21 @@ runs:
       shell: bash
       env:
         DEPBISECT_VERSION: ${{ inputs.version }}
-      run: go install "github.com/skyneticist/depbisect/cmd/depbisect@${DEPBISECT_VERSION}"
+        DEPBISECT_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        if [ "$DEPBISECT_VERSION" = "source" ]; then
+          output="$RUNNER_TEMP/depbisect"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            output="${output}.exe"
+          fi
+          (
+            cd "$DEPBISECT_ACTION_PATH"
+            go build -ldflags "-X main.version=${GITHUB_ACTION_REF:-source}" -o "$output" ./cmd/depbisect
+          )
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+        else
+          go install "github.com/skyneticist/depbisect/cmd/depbisect@${DEPBISECT_VERSION}"
+        fi
 
     - name: Run depbisect
       id: bisect
@@ -72,11 +96,23 @@ runs:
         DB_TO: ${{ inputs.to }}
         DB_RUNS: ${{ inputs.runs }}
         DB_PM: ${{ inputs.pm }}
-        DB_TIMEOUT: ${{ inputs.run-timeout }}
+        DB_RUN_TIMEOUT: ${{ inputs.run-timeout }}
+        DB_INSTALL_TIMEOUT: ${{ inputs.install-timeout }}
+        DB_OVERALL_TIMEOUT: ${{ inputs.overall-timeout }}
         DB_COMMAND: ${{ inputs.command }}
       run: |
         set -o pipefail
-        args=(run --base "$DB_BASE" --to "$DB_TO" --runs "$DB_RUNS" --run-timeout "$DB_TIMEOUT")
+        report_json="depbisect-report.json"
+        rm -f "$report_json" depbisect-report.md
+        args=(
+          run
+          --base "$DB_BASE"
+          --to "$DB_TO"
+          --runs "$DB_RUNS"
+          --run-timeout "$DB_RUN_TIMEOUT"
+          --install-timeout "$DB_INSTALL_TIMEOUT"
+          --overall-timeout "$DB_OVERALL_TIMEOUT"
+        )
         if [ -n "$DB_PM" ]; then
           args+=(--pm "$DB_PM")
         fi
@@ -86,12 +122,12 @@ runs:
         set -e
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"
         outcome=unknown
-        if [ -f depbisect-report.json ]; then
-          outcome=$(python3 -c 'import json;print(json.load(open("depbisect-report.json"))["outcome"])' || echo unknown)
+        if [ -f "$report_json" ]; then
+          outcome=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["outcome"])' "$report_json" || echo unknown)
         fi
         echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
-        # Exit codes 2-5 are diagnostic outcomes, not action failures; the
-        # report tells the story. Only usage/runtime errors fail the step.
-        if [ "$code" -eq 1 ]; then
-          exit 1
-        fi
+        # Only documented result codes are successful action outcomes.
+        case "$code" in
+          0|2|3|4|5) ;;
+          *) exit "$code" ;;
+        esac

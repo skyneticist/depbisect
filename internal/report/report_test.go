@@ -19,15 +19,16 @@ var update = flag.Bool("update", false, "rewrite golden files")
 func fixtureResult() *engine.Result {
 	start := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	return &engine.Result{
-		Outcome:        engine.OutcomeMinimalFound,
-		OutcomeDetail:  "minimal failing set has 1 of 3 changes after 6 candidate tests",
-		BaseRev:        "origin/main",
-		BaseSHA:        "1111111111111111111111111111111111111111",
-		ToRev:          "HEAD",
-		ToSHA:          "2222222222222222222222222222222222222222",
-		PackageManager: "npm",
-		Command:        []string{"npm", "test", "--", "--grep", "parser suite"},
-		Runs:           3,
+		Outcome:               engine.OutcomeMinimalFound,
+		OutcomeDetail:         "minimal failing set has 1 of 3 changes after 6 candidate tests",
+		BaseRev:               "origin/main",
+		BaseSHA:               "1111111111111111111111111111111111111111",
+		ToRev:                 "HEAD",
+		ToSHA:                 "2222222222222222222222222222222222222222",
+		PackageManager:        "npm",
+		PackageManagerVersion: "npm 10.8.2",
+		Command:               []string{"npm", "test", "--", "--grep", "parser suite"},
+		Runs:                  3,
 		Changes: []manifest.Change{
 			{Name: "alpha", Section: manifest.Dependencies, Kind: manifest.Updated, OldSpec: "^1.0.0", NewSpec: "^1.5.0", OldResolved: "1.0.3", NewResolved: "1.5.2"},
 			{Name: "beta", Section: manifest.Dependencies, Kind: manifest.Updated, OldSpec: "3.0.0", NewSpec: "3.2.0", OldResolved: "3.0.0", NewResolved: "3.2.0"},
@@ -39,16 +40,18 @@ func fixtureResult() *engine.Result {
 		Minimal: []manifest.Change{
 			{Name: "beta", Section: manifest.Dependencies, Kind: manifest.Updated, OldSpec: "3.0.0", NewSpec: "3.2.0", OldResolved: "3.0.0", NewResolved: "3.2.0"},
 		},
-		Confidence:  engine.Confidence{Failures: 3, Runs: 3},
-		Diagnostics: []string{"1 dependencies changed only in the lockfile (version spec unchanged): transit (4.0.1 -> 4.9.0)."},
+		Confidence:       engine.Confidence{Failures: 3, Runs: 3},
+		MinimalityProven: true,
+		Diagnostics:      []string{"1 dependencies changed only in the lockfile (version spec unchanged): transit (4.0.1 -> 4.9.0)."},
 		Trials: []engine.Trial{
-			{Role: "baseline-old", Applied: []string{}, Outcome: "pass", RunsExecuted: 3, Failures: 0, Duration: 12 * time.Second},
-			{Role: "baseline-new", Applied: []string{"dependencies:alpha", "dependencies:beta", "devDependencies:tool"}, Outcome: "fail", RunsExecuted: 3, Failures: 3, Duration: 14 * time.Second},
-			{Role: "candidate", Applied: []string{"dependencies:alpha"}, Outcome: "pass", RunsExecuted: 1, Failures: 0, Duration: 9 * time.Second},
-			{Role: "candidate", Applied: []string{"dependencies:beta"}, Outcome: "fail", RunsExecuted: 3, Failures: 3, Duration: 13 * time.Second},
+			{Role: "baseline-old", Applied: []string{}, Outcome: "pass", RunsExecuted: 3, Failures: 0, PrepareDuration: time.Second, InstallDuration: 7 * time.Second, VerifyDuration: 4 * time.Second, Duration: 12 * time.Second},
+			{Role: "baseline-new", Applied: []string{"dependencies:alpha", "dependencies:beta", "devDependencies:tool"}, Outcome: "fail", RunsExecuted: 3, Failures: 3, PrepareDuration: time.Second, InstallDuration: 8 * time.Second, VerifyDuration: 5 * time.Second, Duration: 14 * time.Second},
+			{Role: "candidate", Applied: []string{"dependencies:alpha"}, Outcome: "pass", RunsExecuted: 1, Failures: 0, PrepareDuration: time.Second, InstallDuration: 6 * time.Second, VerifyDuration: 2 * time.Second, Duration: 9 * time.Second},
+			{Role: "candidate", Applied: []string{"dependencies:beta"}, Outcome: "fail", RunsExecuted: 3, Failures: 3, PrepareDuration: time.Second, InstallDuration: 7 * time.Second, VerifyDuration: 5 * time.Second, Duration: 13 * time.Second},
 		},
-		StartedAt:  start,
-		FinishedAt: start.Add(61 * time.Second),
+		StartedAt:       start,
+		FinishedAt:      start.Add(61 * time.Second),
+		CleanupDuration: 4 * time.Second,
 	}
 }
 
@@ -97,6 +100,23 @@ func TestJSONIsValidAndStable(t *testing.T) {
 	}
 	if doc["outcome"] != "minimal-set-found" {
 		t.Errorf("outcome = %v", doc["outcome"])
+	}
+	timings, ok := doc["timings"].(map[string]any)
+	if !ok {
+		t.Fatalf("timings = %#v, want object", doc["timings"])
+	}
+	if timings["installSeconds"] != float64(28) || timings["cleanupSeconds"] != float64(4) {
+		t.Errorf("timings = %#v", timings)
+	}
+	trials, ok := doc["trials"].([]any)
+	if !ok || len(trials) == 0 {
+		t.Fatalf("trials = %#v", doc["trials"])
+	}
+	first, ok := trials[0].(map[string]any)
+	if !ok || first["prepareDurationMs"] != float64(1000) ||
+		first["installDurationMs"] != float64(7000) ||
+		first["verifyDurationMs"] != float64(4000) {
+		t.Errorf("first trial timings = %#v", first)
 	}
 	// Marshalling twice must be byte-identical.
 	again, _ := New(fixtureResult(), "1.2.3").JSON()

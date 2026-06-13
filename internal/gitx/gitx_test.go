@@ -43,6 +43,9 @@ func initRepo(t *testing.T) (dir, first, second string) {
 	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"a","dependencies":{"x":"1.0.0"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	run("add", ".")
 	run("commit", "-q", "-m", "one")
 	first = run("rev-parse", "HEAD")
@@ -195,6 +198,47 @@ func TestWorktreeAddRemove(t *testing.T) {
 	}
 }
 
+func TestResetWorktreeRestoresTrackedAndRemovesUntrackedAndIgnored(t *testing.T) {
+	dir, _, second := initRepo(t)
+	g := newGit(t, dir)
+	ctx := context.Background()
+
+	wt := filepath.Join(t.TempDir(), "wt with spaces")
+	if err := g.AddWorktree(ctx, wt, second); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = g.RemoveWorktree(context.Background(), wt) })
+
+	if err := os.WriteFile(filepath.Join(wt, "package.json"), []byte("modified"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, "untracked.txt"), []byte("untracked"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(wt, "node_modules", "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, "node_modules", "pkg", "index.js"), []byte("ignored"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := g.ResetWorktree(ctx, wt, second); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(wt, "package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"2.0.0"`) {
+		t.Errorf("tracked file was not restored: %q", data)
+	}
+	for _, path := range []string{"untracked.txt", "node_modules"} {
+		if _, err := os.Stat(filepath.Join(wt, path)); !os.IsNotExist(err) {
+			t.Errorf("%s survived worktree reset: %v", path, err)
+		}
+	}
+}
+
 func TestPruneWorktrees(t *testing.T) {
 	dir, first, _ := initRepo(t)
 	g := newGit(t, dir)
@@ -261,6 +305,9 @@ func TestRevisionFlagConfusionRejected(t *testing.T) {
 		}
 		if err := g.AddWorktree(ctx, filepath.Join(t.TempDir(), "wt"), rev); err == nil {
 			t.Errorf("AddWorktree(%q): expected error", rev)
+		}
+		if err := g.ResetWorktree(ctx, filepath.Join(t.TempDir(), "wt"), rev); err == nil {
+			t.Errorf("ResetWorktree(%q): expected error", rev)
 		}
 	}
 }

@@ -127,6 +127,38 @@ func (g *Git) AddWorktree(ctx context.Context, dir, rev string) error {
 	return nil
 }
 
+// ResetWorktree restores an owned worktree to rev and removes every
+// untracked and ignored path. This prevents package-manager and verification
+// side effects from one candidate affecting the next.
+func (g *Git) ResetWorktree(ctx context.Context, dir, rev string) error {
+	if err := validRev(rev); err != nil {
+		return err
+	}
+	reset, err := g.runner.Run(ctx, execx.Cmd{
+		Dir:  dir,
+		Name: "git",
+		Args: []string{"reset", "--hard", rev},
+	})
+	if err != nil {
+		return fmt.Errorf("reset worktree %s: %w", dir, err)
+	}
+	if reset.ExitCode != 0 {
+		return fmt.Errorf("reset worktree %s to %s: %s", dir, rev, firstLine(reset.Stderr))
+	}
+	clean, err := g.runner.Run(ctx, execx.Cmd{
+		Dir:  dir,
+		Name: "git",
+		Args: []string{"clean", "-ffdx"},
+	})
+	if err != nil {
+		return fmt.Errorf("clean worktree %s: %w", dir, err)
+	}
+	if clean.ExitCode != 0 {
+		return fmt.Errorf("clean worktree %s: %s", dir, firstLine(clean.Stderr))
+	}
+	return nil
+}
+
 // RemoveWorktree removes a worktree previously created by AddWorktree,
 // including its administrative entry in the main repository.
 func (g *Git) RemoveWorktree(ctx context.Context, dir string) error {

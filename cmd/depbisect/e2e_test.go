@@ -52,6 +52,9 @@ func runPMHelper() {
 	defer f.Close()
 	name := strings.TrimSuffix(filepath.Base(os.Args[0]), filepath.Ext(os.Args[0]))
 	fmt.Fprintf(f, "%s %s\n", name, strings.Join(os.Args[1:], " "))
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Fprintln(os.Stdout, "9.9.9-test")
+	}
 }
 
 func requireTools(t *testing.T) string {
@@ -171,7 +174,8 @@ func stubPM(t *testing.T) (stubDir, logPath string) {
 	logPath = filepath.Join(t.TempDir(), "pm.log")
 	for _, name := range []string{"npm", "pnpm"} {
 		if runtime.GOOS == "windows" {
-			script := "@echo off\r\n>>\"%PM_LOG%\" echo " + name + " %*\r\nexit /b 0\r\n"
+			script := "@echo off\r\n>>\"%PM_LOG%\" echo " + name + " %*\r\n" +
+				"if \"%1\"==\"--version\" echo 9.9.9-test\r\nexit /b 0\r\n"
 			if err := os.WriteFile(filepath.Join(stubDir, name+".cmd"), []byte(script), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -316,9 +320,10 @@ func TestE2EFindsCulpritNpm(t *testing.T) {
 		t.Fatal(err)
 	}
 	var doc struct {
-		SchemaVersion int    `json:"schemaVersion"`
-		Outcome       string `json:"outcome"`
-		MinimalSet    []struct {
+		SchemaVersion         int    `json:"schemaVersion"`
+		Outcome               string `json:"outcome"`
+		PackageManagerVersion string `json:"packageManagerVersion"`
+		MinimalSet            []struct {
 			Name string `json:"name"`
 		} `json:"minimalSet"`
 		Confidence struct {
@@ -329,6 +334,7 @@ func TestE2EFindsCulpritNpm(t *testing.T) {
 		t.Fatalf("report JSON invalid: %v", err)
 	}
 	if doc.SchemaVersion != 1 || doc.Outcome != "minimal-set-found" ||
+		doc.PackageManagerVersion != "npm 9.9.9-test" ||
 		len(doc.MinimalSet) != 1 || doc.MinimalSet[0].Name != "leftpad" ||
 		doc.Confidence.Failures != 3 {
 		t.Errorf("report = %+v", doc)

@@ -13,6 +13,7 @@
     "sha": "2222222222222222222222222222222222222222"
   },
   "packageManager": "npm",
+  "packageManagerVersion": "npm 10.8.2",
   "command": [
     "npm",
     "test",
@@ -72,6 +73,9 @@
     "failures": 3,
     "runs": 3
   },
+  "minimalityProven": true,
+  "unresolvedTrials": 0,
+  "resumedTrials": 0,
   "diagnostics": [
     "1 dependencies changed only in the lockfile (version spec unchanged): transit (4.0.1 -> 4.9.0)."
   ],
@@ -82,6 +86,9 @@
       "outcome": "pass",
       "runs": 3,
       "failures": 0,
+      "prepareDurationMs": 1000,
+      "installDurationMs": 7000,
+      "verifyDurationMs": 4000,
       "durationMs": 12000
     },
     {
@@ -94,6 +101,9 @@
       "outcome": "fail",
       "runs": 3,
       "failures": 3,
+      "prepareDurationMs": 1000,
+      "installDurationMs": 8000,
+      "verifyDurationMs": 5000,
       "durationMs": 14000
     },
     {
@@ -104,6 +114,9 @@
       "outcome": "pass",
       "runs": 1,
       "failures": 0,
+      "prepareDurationMs": 1000,
+      "installDurationMs": 6000,
+      "verifyDurationMs": 2000,
       "durationMs": 9000
     },
     {
@@ -114,10 +127,19 @@
       "outcome": "fail",
       "runs": 3,
       "failures": 3,
+      "prepareDurationMs": 1000,
+      "installDurationMs": 7000,
+      "verifyDurationMs": 5000,
       "durationMs": 13000
     }
   ],
   "startedAt": "2026-06-01T10:00:00Z",
   "finishedAt": "2026-06-01T10:01:01Z",
-  "durationSeconds": 61
+  "durationSeconds": 61,
+  "timings": {
+    "prepareSeconds": 4,
+    "installSeconds": 28,
+    "verificationSeconds": 16,
+    "cleanupSeconds": 4
+  }
 }

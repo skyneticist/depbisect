@@ -6,6 +6,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,6 +28,7 @@ type GitClient interface {
 	ShowFile(ctx context.Context, rev, path string) ([]byte, error)
 	FileExists(ctx context.Context, rev, path string) (bool, error)
 	AddWorktree(ctx context.Context, dir, rev string) error
+	ResetWorktree(ctx context.Context, dir, rev string) error
 	RemoveWorktree(ctx context.Context, dir string) error
 	PruneWorktrees(ctx context.Context) error
 	IsPathDirty(ctx context.Context, path string) (bool, error)
@@ -34,7 +36,7 @@ type GitClient interface {
 
 // Installer installs dependencies for a candidate manifest.
 type Installer interface {
-	CheckAvailable() error
+	Version(ctx context.Context) (string, error)
 	Install(ctx context.Context, dir string, stream io.Writer) (execx.Result, error)
 }
 
@@ -49,12 +51,15 @@ type Progress interface {
 	Step(format string, args ...any)
 	// Detail reports fine-grained progress (shown in verbose mode).
 	Detail(format string, args ...any)
+	// Trial reports the lifecycle of one newly executed trial.
+	Trial(number int, role string, applied, total int, phase string, elapsed time.Duration)
 }
 
 type nopProgress struct{}
 
-func (nopProgress) Step(string, ...any)   {}
-func (nopProgress) Detail(string, ...any) {}
+func (nopProgress) Step(string, ...any)                                {}
+func (nopProgress) Detail(string, ...any)                              {}
+func (nopProgress) Trial(int, string, int, int, string, time.Duration) {}
 
 // Outcome codes are stable identifiers used in reports and exit codes.
 const (
@@ -79,11 +84,22 @@ type Options struct {
 	DryRun        bool
 	// Stream, when non-nil, receives live install/verify output.
 	Stream io.Writer
+	// Checkpoint persists completed trials. Resume reuses a matching
+	// checkpoint instead of starting it over.
+	Checkpoint        CheckpointStore
+	Resume            bool
+	CheckpointContext string
+	// InstallTimeout bounds each package-manager install. Zero disables it.
+	InstallTimeout time.Duration
+	// OverallTimeout bounds the bisection itself. Cleanup uses a separate
+	// bounded context so it can still run after this deadline.
+	OverallTimeout time.Duration
 }
 
 // Trial records one executed candidate evaluation.
 type Trial struct {
-	// Role is "baseline-old", "baseline-new", or "candidate".
+	// Role is "baseline-old", "baseline-new", "candidate", or
+	// "minimality-check".
 	Role string
 	// Applied lists the change IDs whose new state was applied.
 	Applied []string
@@ -91,35 +107,75 @@ type Trial struct {
 	Outcome      string
 	RunsExecuted int
 	Failures     int
-	Duration     time.Duration
+	// Phase timings are wall-clock durations for completed work in this trial.
+	PrepareDuration time.Duration
+	InstallDuration time.Duration
+	VerifyDuration  time.Duration
+	Duration        time.Duration
 }
 
-// Confidence states how often the final minimal set reproduced the failure.
+// Confidence states how often the final failing set reproduced the failure.
 type Confidence struct {
 	Failures int
 	Runs     int
 }
 
+// CheckpointSchemaVersion identifies the append-only resume format.
+const CheckpointSchemaVersion = 1
+
+// CheckpointFingerprint identifies every input that affects trial outcomes.
+type CheckpointFingerprint struct {
+	BaseSHA               string
+	ToSHA                 string
+	PackageManager        string
+	PackageManagerVersion string
+	Command               []string
+	Runs                  int
+	Changes               []string
+	Context               string
+}
+
+// Checkpoint is the durable state needed to resume a run.
+type Checkpoint struct {
+	SchemaVersion int
+	Fingerprint   CheckpointFingerprint
+	StartedAt     time.Time
+	Trials        []Trial
+}
+
+// CheckpointStore persists a header followed by completed trial records.
+type CheckpointStore interface {
+	Load() (*Checkpoint, error)
+	Start(Checkpoint) error
+	Append(Trial) error
+	Clear() error
+}
+
 // Result is the full account of a run.
 type Result struct {
-	Outcome        string
-	OutcomeDetail  string
-	BaseRev        string
-	BaseSHA        string
-	ToRev          string
-	ToSHA          string
-	PackageManager string
-	Command        []string
-	Runs           int
-	Changes        []manifest.Change
-	LockfileOnly   []manifest.LockfileChange
-	Minimal        []manifest.Change
-	Confidence     Confidence
-	Diagnostics    []string
-	Trials         []Trial
-	StartedAt      time.Time
-	FinishedAt     time.Time
-	KeptWorktree   string
+	Outcome               string
+	OutcomeDetail         string
+	BaseRev               string
+	BaseSHA               string
+	ToRev                 string
+	ToSHA                 string
+	PackageManager        string
+	PackageManagerVersion string
+	Command               []string
+	Runs                  int
+	Changes               []manifest.Change
+	LockfileOnly          []manifest.LockfileChange
+	Minimal               []manifest.Change
+	Confidence            Confidence
+	MinimalityProven      bool
+	UnresolvedTrials      int
+	ResumedTrials         int
+	Diagnostics           []string
+	Trials                []Trial
+	StartedAt             time.Time
+	FinishedAt            time.Time
+	CleanupDuration       time.Duration
+	KeptWorktree          string
 }
 
 // Engine wires the collaborators together.
@@ -140,6 +196,7 @@ const manifestName = "package.json"
 // Run executes the bisection described by opts. The returned Result is
 // non-nil even on error, carrying whatever was established before failure.
 func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
+	parentCtx := ctx
 	now := e.Now
 	if now == nil {
 		now = time.Now
@@ -156,6 +213,11 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	if runs < 1 {
 		runs = 1
 	}
+	if opts.OverallTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opts.OverallTimeout)
+		defer cancel()
+	}
 
 	res := &Result{
 		BaseRev:   opts.BaseRev,
@@ -164,12 +226,23 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		Runs:      runs,
 		StartedAt: now().UTC(),
 	}
+	checkpointActive := false
 	finish := func() (*Result, error) {
 		res.FinishedAt = now().UTC()
+		if checkpointActive {
+			if err := opts.Checkpoint.Clear(); err != nil {
+				res.Diagnostics = append(res.Diagnostics, fmt.Sprintf("could not remove completed checkpoint: %v", err))
+			}
+		}
 		return res, nil
 	}
 	fail := func(err error) (*Result, error) {
 		res.FinishedAt = now().UTC()
+		if opts.OverallTimeout > 0 &&
+			errors.Is(ctx.Err(), context.DeadlineExceeded) &&
+			parentCtx.Err() == nil {
+			err = fmt.Errorf("bisection timed out after %s: %w", opts.OverallTimeout, context.DeadlineExceeded)
+		}
 		return res, err
 	}
 
@@ -259,11 +332,48 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		return finish()
 	}
 
-	// Phase 4: set up the isolated worktree.
 	installer := e.NewInstaller(manager)
-	if err := installer.CheckAvailable(); err != nil {
+	managerVersion, err := installer.Version(ctx)
+	if err != nil {
 		return fail(err)
 	}
+	res.PackageManagerVersion = managerVersion
+
+	fingerprint := makeCheckpointFingerprint(
+		baseSHA, toSHA, manager, managerVersion, opts.Command, runs, changes, opts.CheckpointContext,
+	)
+	memo := map[string]Trial{}
+	trialNumber := 0
+	if opts.Checkpoint != nil {
+		if opts.Resume {
+			cp, err := opts.Checkpoint.Load()
+			if err != nil {
+				return fail(fmt.Errorf("load checkpoint: %w", err))
+			}
+			if err := validateCheckpoint(cp, fingerprint); err != nil {
+				return fail(err)
+			}
+			res.StartedAt = cp.StartedAt.UTC()
+			for _, trial := range cp.Trials {
+				memo[subsetKeyIDs(trial.Applied)] = trial
+				res.Trials = append(res.Trials, trial)
+			}
+			res.ResumedTrials = len(cp.Trials)
+			trialNumber = len(cp.Trials)
+			progress.Step("Resuming from checkpoint with %d completed trials", len(cp.Trials))
+		} else {
+			if err := opts.Checkpoint.Start(Checkpoint{
+				SchemaVersion: CheckpointSchemaVersion,
+				Fingerprint:   fingerprint,
+				StartedAt:     res.StartedAt,
+			}); err != nil {
+				return fail(fmt.Errorf("create checkpoint: %w", err))
+			}
+		}
+		checkpointActive = true
+	}
+
+	// Phase 4: set up the isolated worktree.
 	parent, err := mkdirTemp()
 	if err != nil {
 		return fail(fmt.Errorf("create temporary directory: %w", err))
@@ -273,11 +383,16 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		os.RemoveAll(parent)
 		return fail(err)
 	}
-	defer e.cleanup(parent, wt, opts.KeepWorktrees, res, progress)
+	defer func() {
+		cleanupStart := now()
+		e.cleanup(parent, wt, opts.KeepWorktrees, res, progress)
+		cleanupEnd := now()
+		res.CleanupDuration = cleanupEnd.Sub(cleanupStart)
+		res.FinishedAt = cleanupEnd.UTC()
+	}()
 	progress.Detail("Created worktree at %s", wt)
 
 	// Phase 5: evaluate candidates with memoization.
-	memo := map[string]Trial{}
 	runSubset := func(subset []manifest.Change, role string, stopOnPass bool) (Trial, error) {
 		key := subsetKey(subset)
 		if cached, ok := memo[key]; ok {
@@ -286,6 +401,13 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		if err := ctx.Err(); err != nil {
 			return Trial{}, fmt.Errorf("bisection interrupted: %w", err)
 		}
+		trialNumber++
+		progress.Trial(trialNumber, role, len(subset), len(changes), "preparing", 0)
+		start := now()
+		if err := e.Git.ResetWorktree(ctx, wt, toSHA); err != nil {
+			return Trial{}, fmt.Errorf("prepare isolated trial worktree: %w", err)
+		}
+
 		applied := make(map[string]bool, len(subset))
 		trial := Trial{Role: role, Applied: make([]string, 0, len(subset))}
 		for _, c := range subset {
@@ -301,27 +423,50 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		if err := os.WriteFile(filepath.Join(wt, manifestName), rendered, 0o644); err != nil {
 			return Trial{}, fmt.Errorf("write candidate manifest: %w", err)
 		}
-		start := now()
-		instRes, err := installer.Install(ctx, wt, opts.Stream)
+		afterPrepare := now()
+		trial.PrepareDuration = afterPrepare.Sub(start)
+		progress.Trial(trialNumber, role, len(subset), len(changes), "installing", trial.PrepareDuration)
+
+		installCtx := ctx
+		cancelInstall := func() {}
+		if opts.InstallTimeout > 0 {
+			installCtx, cancelInstall = context.WithTimeout(ctx, opts.InstallTimeout)
+		}
+		instRes, err := installer.Install(installCtx, wt, opts.Stream)
+		installContextErr := installCtx.Err()
+		cancelInstall()
+		afterInstall := now()
+		trial.InstallDuration = afterInstall.Sub(afterPrepare)
 		if err != nil {
+			if opts.InstallTimeout > 0 &&
+				errors.Is(installContextErr, context.DeadlineExceeded) &&
+				!errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return Trial{}, fmt.Errorf("dependency installation timed out after %s: %w",
+					opts.InstallTimeout, context.DeadlineExceeded)
+			}
 			return Trial{}, fmt.Errorf("install dependencies: %w", err)
 		}
 		if instRes.ExitCode != 0 {
 			trial.Outcome = "unresolved"
-			trial.Duration = now().Sub(start)
+			trial.Duration = afterInstall.Sub(start)
+			progress.Trial(trialNumber, role, len(subset), len(changes), trial.Outcome, trial.Duration)
 			progress.Detail("Install failed for %d applied changes (%s); candidate skipped",
 				len(subset), firstLine(instRes.Stderr))
-			memo[key] = trial
-			res.Trials = append(res.Trials, trial)
+			if err := recordTrial(opts.Checkpoint, checkpointActive, memo, key, res, trial); err != nil {
+				return Trial{}, err
+			}
 			return trial, nil
 		}
+		progress.Trial(trialNumber, role, len(subset), len(changes), "verifying", afterInstall.Sub(start))
 		verdict, err := e.Verifier.Verify(ctx, wt, stopOnPass)
 		if err != nil {
 			return Trial{}, fmt.Errorf("run verification command: %w", err)
 		}
+		afterVerify := now()
 		trial.RunsExecuted = len(verdict.Runs)
 		trial.Failures = verdict.Failures
-		trial.Duration = now().Sub(start)
+		trial.VerifyDuration = afterVerify.Sub(afterInstall)
+		trial.Duration = afterVerify.Sub(start)
 		switch verdict.Classification() {
 		case verify.AlwaysFail:
 			trial.Outcome = "fail"
@@ -330,9 +475,11 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		default:
 			trial.Outcome = "pass" // flaky: does not deterministically reproduce
 		}
+		progress.Trial(trialNumber, role, len(subset), len(changes), trial.Outcome, trial.Duration)
 		progress.Detail("Tested %d applied changes: %s (%s)", len(subset), trial.Outcome, verdict.String())
-		memo[key] = trial
-		res.Trials = append(res.Trials, trial)
+		if err := recordTrial(opts.Checkpoint, checkpointActive, memo, key, res, trial); err != nil {
+			return Trial{}, err
+		}
 		return trial, nil
 	}
 
@@ -392,7 +539,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 
 	// Phase 7: delta debugging.
 	progress.Step("Bisecting %d changes (ddmin)", len(changes))
-	minimal, stats, err := ddmin.Minimize(changes, func(subset []manifest.Change) (ddmin.Outcome, error) {
+	minimal, _, err := ddmin.Minimize(changes, func(subset []manifest.Change) (ddmin.Outcome, error) {
 		trial, err := runSubset(subset, "candidate", true)
 		if err != nil {
 			return ddmin.Unresolved, err
@@ -422,14 +569,164 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 				"if the minimal set looks wrong, increase --runs", flakyCandidates))
 	}
 
-	res.Minimal = minimal
-	final := memo[subsetKey(minimal)]
+	bestKnown := minimal
+	var uncertainNeighbors []string
+	for {
+		uncertainNeighbors = uncertainNeighbors[:0]
+		reduced := false
+		for i := range bestKnown {
+			neighbor := removeChange(bestKnown, i)
+			trial, err := runSubset(neighbor, "minimality-check", true)
+			if err != nil {
+				return fail(err)
+			}
+			if trial.Outcome == "fail" {
+				bestKnown = neighbor
+				reduced = true
+				break
+			}
+			if trial.Outcome == "unresolved" || (trial.Outcome == "pass" && trial.Failures > 0) {
+				uncertainNeighbors = append(uncertainNeighbors, bestKnown[i].ID())
+			}
+		}
+		if !reduced {
+			break
+		}
+	}
+
+	res.Minimal = bestKnown
+	final := memo[subsetKey(bestKnown)]
 	res.Confidence = Confidence{Failures: final.Failures, Runs: final.RunsExecuted}
-	res.Outcome = OutcomeMinimalFound
-	res.OutcomeDetail = fmt.Sprintf("minimal failing set has %d of %d changes after %d candidate tests",
-		len(minimal), len(changes), stats.Tests)
-	progress.Step("Minimal failing set: %d of %d changes", len(minimal), len(changes))
+	for _, trial := range res.Trials {
+		if trial.Outcome == "unresolved" {
+			res.UnresolvedTrials++
+		}
+	}
+	if len(uncertainNeighbors) == 0 {
+		candidateTests := countCandidateTrials(res.Trials)
+		res.MinimalityProven = true
+		res.Outcome = OutcomeMinimalFound
+		res.OutcomeDetail = fmt.Sprintf("minimal failing set has %d of %d changes after %d candidate tests",
+			len(bestKnown), len(changes), candidateTests)
+		progress.Step("Minimal failing set: %d of %d changes", len(bestKnown), len(changes))
+	} else {
+		res.Outcome = OutcomeInconclusive
+		res.OutcomeDetail = fmt.Sprintf(
+			"best-known failing set has %d of %d changes, but 1-minimality could not be proven because %d required neighboring configurations were unresolved or flaky",
+			len(bestKnown), len(changes), len(uncertainNeighbors))
+		res.Diagnostics = append(res.Diagnostics, fmt.Sprintf(
+			"minimality checks were unresolved or flaky when removing: %s",
+			strings.Join(uncertainNeighbors, ", ")))
+		progress.Step("Best-known failing set: %d of %d changes (minimality not proven)", len(bestKnown), len(changes))
+	}
 	return finish()
+}
+
+func countCandidateTrials(trials []Trial) int {
+	count := 0
+	for _, trial := range trials {
+		if trial.Role == "candidate" || trial.Role == "minimality-check" {
+			count++
+		}
+	}
+	return count
+}
+
+func recordTrial(store CheckpointStore, checkpointActive bool, memo map[string]Trial, key string, res *Result, trial Trial) error {
+	memo[key] = trial
+	res.Trials = append(res.Trials, trial)
+	if checkpointActive {
+		if err := store.Append(trial); err != nil {
+			return fmt.Errorf("save checkpoint trial: %w", err)
+		}
+	}
+	return nil
+}
+
+func makeCheckpointFingerprint(baseSHA, toSHA string, manager pm.Manager, managerVersion string, command []string, runs int, changes []manifest.Change, context string) CheckpointFingerprint {
+	ids := make([]string, len(changes))
+	for i, change := range changes {
+		ids[i] = change.ID()
+	}
+	return CheckpointFingerprint{
+		BaseSHA:               baseSHA,
+		ToSHA:                 toSHA,
+		PackageManager:        string(manager),
+		PackageManagerVersion: managerVersion,
+		Command:               append([]string(nil), command...),
+		Runs:                  runs,
+		Changes:               ids,
+		Context:               context,
+	}
+}
+
+func validateCheckpoint(cp *Checkpoint, want CheckpointFingerprint) error {
+	if cp == nil {
+		return fmt.Errorf("checkpoint is empty")
+	}
+	if cp.SchemaVersion != CheckpointSchemaVersion {
+		return fmt.Errorf("checkpoint schema version %d is unsupported (want %d)",
+			cp.SchemaVersion, CheckpointSchemaVersion)
+	}
+	if !checkpointFingerprintsEqual(cp.Fingerprint, want) {
+		return fmt.Errorf("checkpoint does not match this run; remove it or run without --resume")
+	}
+	if cp.StartedAt.IsZero() {
+		return fmt.Errorf("checkpoint has no start time")
+	}
+	known := make(map[string]bool, len(want.Changes))
+	for _, id := range want.Changes {
+		known[id] = true
+	}
+	seen := make(map[string]bool, len(cp.Trials))
+	for i, trial := range cp.Trials {
+		switch trial.Outcome {
+		case "pass", "fail", "unresolved":
+		default:
+			return fmt.Errorf("checkpoint trial %d has invalid outcome %q", i+1, trial.Outcome)
+		}
+		for _, id := range trial.Applied {
+			if !known[id] {
+				return fmt.Errorf("checkpoint trial %d refers to unknown change %q", i+1, id)
+			}
+		}
+		key := subsetKeyIDs(trial.Applied)
+		if seen[key] {
+			return fmt.Errorf("checkpoint contains duplicate trial subset at record %d", i+1)
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+func checkpointFingerprintsEqual(a, b CheckpointFingerprint) bool {
+	return a.BaseSHA == b.BaseSHA &&
+		a.ToSHA == b.ToSHA &&
+		a.PackageManager == b.PackageManager &&
+		a.PackageManagerVersion == b.PackageManagerVersion &&
+		a.Runs == b.Runs &&
+		a.Context == b.Context &&
+		equalStrings(a.Command, b.Command) &&
+		equalStrings(a.Changes, b.Changes)
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func removeChange(changes []manifest.Change, index int) []manifest.Change {
+	out := make([]manifest.Change, 0, len(changes)-1)
+	out = append(out, changes[:index]...)
+	out = append(out, changes[index+1:]...)
+	return out
 }
 
 // readManifest loads and parses package.json at a revision.
@@ -511,8 +808,13 @@ func subsetKey(subset []manifest.Change) string {
 	for i, c := range subset {
 		ids[i] = c.ID()
 	}
-	sort.Strings(ids)
-	return strings.Join(ids, "\x00")
+	return subsetKeyIDs(ids)
+}
+
+func subsetKeyIDs(ids []string) string {
+	sorted := append([]string(nil), ids...)
+	sort.Strings(sorted)
+	return strings.Join(sorted, "\x00")
 }
 
 func lockfileOnlyNames(lcs []manifest.LockfileChange) string {

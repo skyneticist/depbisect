@@ -90,21 +90,32 @@ func TestInstallInvocation(t *testing.T) {
 	}
 }
 
-func TestCheckAvailable(t *testing.T) {
+func TestVersion(t *testing.T) {
 	missing := errors.New("not found")
-	inst := Installer{Manager: PNPM, LookPath: func(name string) (string, error) {
+	inst := Installer{Runner: execx.NewFake(), Manager: PNPM, LookPath: func(name string) (string, error) {
 		if name == "pnpm" {
 			return "", missing
 		}
 		return "/bin/" + name, nil
 	}}
-	err := inst.CheckAvailable()
+	_, err := inst.Version(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "pnpm") {
 		t.Errorf("err = %v, want mention of pnpm", err)
 	}
 
 	inst.LookPath = func(name string) (string, error) { return "/bin/" + name, nil }
-	if err := inst.CheckAvailable(); err != nil {
-		t.Errorf("err = %v, want nil", err)
+	fake := execx.NewFake()
+	fake.Default.Result = execx.Result{Stdout: []byte("9.15.4\n")}
+	inst.Runner = fake
+	identity, err := inst.Version(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity != "pnpm 9.15.4" {
+		t.Errorf("identity = %q", identity)
+	}
+	call := fake.Calls()[0]
+	if !reflect.DeepEqual(call.Args, []string{"--version"}) || !call.AllowTrustedBatch {
+		t.Errorf("version command = %+v", call)
 	}
 }
