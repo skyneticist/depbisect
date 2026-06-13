@@ -193,6 +193,8 @@ func parseRunArgs(args []string) (*runOptions, error) {
 	return opts, nil
 }
 
+// runMain parses `depbisect run` arguments, executes the bisection, writes the
+// report files, prints the summary, and returns the mapped exit code.
 func runMain(args []string, stdout, stderr io.Writer, version string) int {
 	opts, err := parseRunArgs(args)
 	if err != nil {
