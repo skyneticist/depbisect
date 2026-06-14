@@ -1,0 +1,17 @@
+# Keep the build context to what `go build ./cmd/depbisect` needs.
+.git
+.github
+.cache
+dist
+node_modules
+**/node_modules
+npm
+docs
+examples
+*.tar.gz
+*.zip
+*.png
+*.gif
+/depbisect
+depbisect-report.*
+.depbisect-checkpoint.jsonl

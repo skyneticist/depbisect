@@ -42,3 +42,21 @@ brews:
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     skip_upload: true
+
+# The Scoop (Windows) manifest is generated from the windows zip archives.
+# Publishing it needs a separate bucket repo + a PAT, same as Homebrew above.
+# To enable:
+#   1. Create the skyneticist/scoop-bucket repo with an initial commit.
+#   2. Add a fine-grained PAT (contents: read/write on scoop-bucket) as the
+#      SCOOP_BUCKET_GITHUB_TOKEN secret.
+#   3. Set skip_upload to false; the token is wired in release.yml.
+scoops:
+  - name: depbisect
+    description: "git bisect, but for dependency updates"
+    homepage: https://github.com/skyneticist/depbisect
+    license: MIT
+    repository:
+      owner: skyneticist
+      name: scoop-bucket
+      token: "{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}"
+    skip_upload: true
