@@ -1,0 +1,68 @@
+name: npm publish
+
+# Publishes the depbisect launcher and its per-platform binary packages to npm
+# with provenance (a signed, verifiable link from the published tarballs back to
+# this workflow run and commit).
+#
+# One-time setup before the first run:
+#   1. Create the npm org/scope `@depbisect` (free for public packages) and make
+#      sure the unscoped name `depbisect` is available (`npm view depbisect`).
+#   2. Add an npm automation token as the repository secret `NPM_TOKEN`.
+# Provenance additionally requires `id-token: write` (below) and a public repo.
+
+# Triggered on tag push rather than the `release` event: releases created by
+# goreleaser using GITHUB_TOKEN do not trigger downstream workflows. This job is
+# self-contained (it cross-compiles from the tagged source), so it can run in
+# parallel with the goreleaser release job.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish, e.g. 0.1.1 (leading "v" is allowed)
+        required: true
+
+permissions:
+  contents: read
+  id-token: write # required for npm provenance (OIDC)
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20" # ships npm >= 9.5, which supports --provenance
+          registry-url: https://registry.npmjs.org
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            v="${{ github.ref_name }}"
+          else
+            v="${{ github.event.inputs.version }}"
+          fi
+          echo "version=${v#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build npm packages
+        run: node scripts/build-npm.mjs "${{ steps.ver.outputs.version }}"
+
+      - name: Publish platform packages, then the launcher
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for dir in npm/@depbisect/*/; do
+            echo "publishing $dir"
+            npm publish "$dir" --provenance --access public
+          done
+          echo "publishing npm/depbisect"
+          npm publish npm/depbisect --provenance --access public

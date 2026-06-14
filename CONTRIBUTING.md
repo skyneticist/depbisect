@@ -45,4 +45,11 @@ staticcheck ./...     # go install honnef.co/go/tools/cmd/staticcheck@latest
 
 ## Releases
 
-Tag `vX.Y.Z` (semver). CI builds reproducible artifacts with goreleaser, including checksums.
+Tag `vX.Y.Z` (semver). Pushing the tag runs two workflows in parallel:
+
+- **`release`** (goreleaser) — builds reproducible binaries + `checksums.txt`, publishes the GitHub Release, and (once a tap is configured) the Homebrew formula.
+- **`npm publish`** — `scripts/build-npm.mjs` cross-compiles every target and publishes the `depbisect` launcher plus its per-platform `@depbisect/*` packages to npm with provenance. See [npm/](npm/).
+
+`install.sh` installs the latest release binary with checksum verification. The
+npm packaging is independent of the GitHub Release: it compiles from the tagged
+source itself.

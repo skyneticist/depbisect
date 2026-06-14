@@ -53,16 +53,39 @@ Breaking dependencies
 
 ## Install
 
-```sh
-# With Go (1.20+)
-go install github.com/skyneticist/depbisect/cmd/depbisect@latest
+DepBisect ships as a single static binary — pick whichever method fits. You'll
+also need `git` and either `npm` or `pnpm` on your `PATH`.
 
-# Or grab a prebuilt binary (Linux/macOS/Windows · amd64/arm64) and verify it:
-#   https://github.com/skyneticist/depbisect/releases
+**npm / pnpm / yarn** — no Go toolchain required:
+
+```sh
+npm install -g depbisect                            # or: pnpm add -g depbisect
+npx depbisect run --base origin/main -- npm test    # …or run without installing
+```
+
+**Homebrew** (macOS / Linux):
+
+```sh
+brew install skyneticist/tap/depbisect
+```
+
+**Install script** (Linux / macOS) — downloads the release binary and verifies its checksum:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/skyneticist/depbisect/main/install.sh | sh
+```
+
+**Prebuilt binary** — download for your platform from the [releases page](https://github.com/skyneticist/depbisect/releases), then verify:
+
+```sh
 shasum -c --ignore-missing checksums.txt
 ```
 
-You also need `git` and either `npm` or `pnpm` on your `PATH`.
+**Go** (1.20+):
+
+```sh
+go install github.com/skyneticist/depbisect/cmd/depbisect@latest
+```
 
 ## Quick start
 
