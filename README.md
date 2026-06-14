@@ -13,6 +13,12 @@ You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 
 `git bisect` walks *commits* — it can't help when the breakage lives inside a single dependency-update commit. DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies declared in `package.json` between two revisions, then uses delta-debugging to isolate the exact subset responsible for the failure — all inside a throwaway worktree that never touches your checkout.
 
+<!--
+  Animated hero: run `vhs docs/demo.tape` to produce docs/demo.gif, commit it,
+  then replace the static block below with this line for an animated demo:
+  ![DepBisect narrowing 43 dependency changes down to the one that broke the build](docs/demo.gif)
+-->
+
 ```text
 $ depbisect run --base origin/main -- pnpm test
      Compare origin/main (a1b2c3d4e5f6) -> HEAD (f6e5d4c3b2a1)
@@ -50,6 +56,19 @@ Breaking dependencies
 - **Deterministic & memoized.** Identical inputs produce an identical bisection path, and no dependency subset is ever installed or tested twice.
 - **CI-ready.** Meaningful exit codes (0–5), a schema-stable JSON report, and a reusable composite GitHub Action.
 - **Honest by design.** Lockfile-only changes, workspaces, and flaky baselines surface as clear diagnostics — DepBisect would rather say "inconclusive" than overstate certainty.
+
+> ⭐ **If DepBisect saves you a dependency-debugging session, please star it** — it's the main way other developers find the project.
+
+## Why DepBisect
+
+**Reach for it when** a dependency-update PR (Dependabot, Renovate, or a manual bump) turns CI red and you can't tell which package did it — especially when dozens changed at once, or when the culprit only breaks in combination with another bump.
+
+| Instead of…               | The catch                                                                        | DepBisect                                  |
+| ------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------ |
+| `git bisect`              | Bisects *commits* — useless when the break is inside one dependency-bump commit  | Bisects the dependency changes themselves  |
+| Reverting bumps by hand   | O(n) reinstalls, easy to miss interacting deps, no proof you found the real cause | `ddmin` + an automatic 1-minimality proof  |
+| Reading the lockfile diff | Shows *what* resolved differently, not *what broke*                              | Pinpoints the exact minimal breaking set   |
+| `npm why` / `npm ls`      | Explains the dependency tree, not the failure                                    | Ties the failure to specific version bumps |
 
 ## Install
 

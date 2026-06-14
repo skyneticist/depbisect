@@ -5,3 +5,6 @@ depbisect-report.json
 .claude
 .cache/
 
+# Local launch/marketing scratch — not repo content
+docs/launch.md
+
