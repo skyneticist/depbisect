@@ -1,0 +1,48 @@
+{
+  "name": "depbisect",
+  "version": "0.0.0-managed",
+  "description": "git bisect, but for dependency updates — find the minimal set of package.json changes between two commits that breaks your build, and prove it's minimal.",
+  "keywords": [
+    "bisect",
+    "git-bisect",
+    "dependencies",
+    "dependency",
+    "npm",
+    "pnpm",
+    "package-json",
+    "delta-debugging",
+    "ddmin",
+    "ci",
+    "debugging",
+    "devtools"
+  ],
+  "homepage": "https://github.com/skyneticist/depbisect#readme",
+  "bugs": {
+    "url": "https://github.com/skyneticist/depbisect/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skyneticist/depbisect.git"
+  },
+  "license": "MIT",
+  "author": "skyneticist",
+  "bin": {
+    "depbisect": "bin/depbisect.js"
+  },
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "optionalDependencies": {
+    "@depbisect/linux-x64": "0.0.0-managed",
+    "@depbisect/linux-arm64": "0.0.0-managed",
+    "@depbisect/darwin-x64": "0.0.0-managed",
+    "@depbisect/darwin-arm64": "0.0.0-managed",
+    "@depbisect/win32-x64": "0.0.0-managed",
+    "@depbisect/win32-arm64": "0.0.0-managed"
+  }
+}
