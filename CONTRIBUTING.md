@@ -45,11 +45,12 @@ staticcheck ./...     # go install honnef.co/go/tools/cmd/staticcheck@latest
 
 ## Releases
 
-Tag `vX.Y.Z` (semver). Pushing the tag runs two workflows in parallel:
+Tag `vX.Y.Z` (semver). Pushing the tag runs three workflows in parallel:
 
-- **`release`** (goreleaser) — builds reproducible binaries + `checksums.txt`, publishes the GitHub Release, and (once a tap is configured) the Homebrew formula.
+- **`release`** (goreleaser) — builds reproducible binaries + `checksums.txt`, publishes the GitHub Release, and (once the bucket/tap repos are configured) the Homebrew formula and Scoop manifest.
 - **`npm publish`** — `scripts/build-npm.mjs` cross-compiles every target and publishes the `depbisect` launcher plus its per-platform `@depbisect/*` packages to npm with provenance. See [npm/](npm/).
+- **`Docker`** — builds a multi-arch image from the [Dockerfile](Dockerfile) and pushes it to `ghcr.io/skyneticist/depbisect` using the built-in `GITHUB_TOKEN`.
 
 `install.sh` installs the latest release binary with checksum verification. The
-npm packaging is independent of the GitHub Release: it compiles from the tagged
-source itself.
+npm and Docker pipelines are independent of the GitHub Release: each compiles
+from the tagged source itself.

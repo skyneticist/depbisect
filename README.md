@@ -88,6 +88,13 @@ npx depbisect run --base origin/main -- npm test    # …or run without installi
 brew install skyneticist/tap/depbisect
 ```
 
+**Scoop** (Windows):
+
+```powershell
+scoop bucket add depbisect https://github.com/skyneticist/scoop-bucket
+scoop install depbisect
+```
+
 **Install script** (Linux / macOS) — downloads the release binary and verifies its checksum:
 
 ```sh
@@ -104,6 +111,13 @@ shasum -c --ignore-missing checksums.txt
 
 ```sh
 go install github.com/skyneticist/depbisect/cmd/depbisect@latest
+```
+
+**Docker** — the image bundles `git`, `node`, npm, and pnpm; mount your repo at `/work`:
+
+```sh
+docker run --rm -v "$PWD:/work" ghcr.io/skyneticist/depbisect \
+  run --base origin/main --runs 3 -- npm test
 ```
 
 ## Quick start
