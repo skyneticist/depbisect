@@ -1,0 +1,39 @@
+name: Move version aliases
+
+# Keeps the sliding major/minor tags (e.g. v0, v0.1) pointing at the latest
+# exact release, so `uses: skyneticist/depbisect@v0` always resolves to current
+# code. Pushing a release tag like v0.1.2 re-points v0 and v0.1 to that commit.
+#
+# Triggers only on exact semver tags (digits.digits.digits) so it never fires on
+# the alias tags themselves and never moves a stable alias onto a pre-release.
+# The alias pushes use the built-in GITHUB_TOKEN, which does not re-trigger
+# workflows — so there is no risk of a release/move loop.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  move-aliases:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Re-point major and minor tags
+        env:
+          TAG: ${{ github.ref_name }} # e.g. v1.2.3
+        run: |
+          set -euo pipefail
+          ver="${TAG#v}"        # 1.2.3
+          major="v${ver%%.*}"   # v1
+          minor="v${ver%.*}"    # v1.2
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for alias in "$major" "$minor"; do
+            echo "Re-pointing $alias -> $GITHUB_SHA"
+            git tag -f "$alias" "$GITHUB_SHA"
+            git push origin "refs/tags/$alias" --force
+          done
