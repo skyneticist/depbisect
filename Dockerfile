@@ -25,6 +25,7 @@ FROM node:20-slim
 # image so the package manager works offline, with no download at run time.
 ENV COREPACK_DEFAULT_TO_LATEST=0
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && corepack enable \
