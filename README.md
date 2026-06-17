@@ -13,39 +13,7 @@ You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 
 `git bisect` walks *commits* — it can't help when the breakage lives inside a single dependency-update commit. DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies declared in `package.json` between two revisions, then uses delta-debugging to isolate the exact subset responsible for the failure — all inside a throwaway worktree that never touches your checkout.
 
-<!--
-  Animated hero: run `vhs docs/demo.tape` to produce docs/demo.gif, commit it,
-  then replace the static block below with this line for an animated demo:
-  ![DepBisect narrowing 43 dependency changes down to the one that broke the build](docs/demo.gif)
--->
-
-```text
-$ depbisect run --base origin/main -- pnpm test
-     Compare origin/main (a1b2c3d4e5f6) -> HEAD (f6e5d4c3b2a1)
-     Changes 43 direct dependency changes
-    Baseline 1/2 | without updates (expect PASS)
-    EXPECTED trial 1 | baseline without updates | 0/43 changes | PASS | 12.1s
-    Baseline 2/2 | with all updates (expect FAIL)
-    EXPECTED trial 2 | baseline with all updates | 43/43 changes | FAIL | 13.4s
-      Bisect 43 changes with ddmin
-         ...
-    Complete minimal failing set contains 1 of 43 changes
-
-      Result Minimal breaking dependency set found
-
-Breaking dependencies
-  - @acme/parser 3.8.1 -> 3.9.0
-
-     Command pnpm test
-     Manager pnpm 9.15.0
-    Evidence 3/3 failing runs
-     Changes 43 analyzed
-      Trials 17
-    Duration 2m14.3s
-     Outcome minimal-set-found
-      Report depbisect-report.md
-        JSON depbisect-report.json
-```
+![DepBisect narrowing 43 dependency changes down to the one that broke the build](docs/demo.gif)
 
 ## Features
 
