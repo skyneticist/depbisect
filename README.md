@@ -194,6 +194,7 @@ Common flags — run `depbisect help` for the complete list.
 | `--resume`            | Resume completed trials from the checkpoint                     |
 | `--quiet` / `--verbose` | Print only the final result / stream all subprocess output    |
 | `--pm <npm\|pnpm>`    | Force a package manager (default: detected from lockfile)       |
+| `--style <name>`      | Output style: `modern` (default) or `classic`; also set via `DEPBISECT_STYLE` |
 
 <details>
 <summary><b>Timeouts, checkpoints, reports, and environment</b></summary>
@@ -210,9 +211,13 @@ continue. Use `--checkpoint <path>` to relocate it, or `--checkpoint ""` to disa
 
 **Reports.** `--report-md` / `--report-json` set output paths; `--no-reports` writes none.
 
-**Output.** Progress adapts to its destination: a terminal gets a width-aware, in-place
-active trial, while redirected output stays plain and line-oriented for CI logs. `NO_COLOR`
-and `CLICOLOR=0` disable color; `CLICOLOR_FORCE=1` forces it when redirected.
+**Output.** Two styles, selected with `--style` or the `DEPBISECT_STYLE` environment
+variable. `modern` (default) shows glyph lifecycle rows (`baseline` / `reproduced` /
+`ddmin`) and a dressed result summary; `classic` keeps the original label-column layout.
+Either way, output adapts to its destination: a terminal gets a width-aware, in-place
+active line, while redirected output (CI logs, pipes) stays plain and line-oriented — the
+modern styling is a terminal-only enhancement, so machine-readable output is unchanged.
+`NO_COLOR` and `CLICOLOR=0` disable color; `CLICOLOR_FORCE=1` forces it when redirected.
 
 </details>
 

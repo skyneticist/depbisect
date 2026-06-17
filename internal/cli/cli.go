@@ -68,6 +68,8 @@ Flags for run:
   --dry-run             show detected changes and plan; run nothing
   --quiet               suppress progress; print only the final result
   --verbose             stream subprocess output and extra progress detail
+  --style <name>        output style: modern (default) or classic; also set
+                        with DEPBISECT_STYLE
 
 Exit codes:
   0  minimal failing set found (or version/completion/dry-run success)
@@ -121,6 +123,7 @@ type runOptions struct {
 	dryRun         bool
 	quiet          bool
 	verbose        bool
+	style          outputStyle
 	command        []string
 }
 
@@ -159,9 +162,23 @@ func parseRunArgs(args []string) (*runOptions, error) {
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "")
 	fs.BoolVar(&opts.quiet, "quiet", false, "")
 	fs.BoolVar(&opts.verbose, "verbose", false, "")
+	var styleName string
+	fs.StringVar(&styleName, "style", "", "")
 	if err := fs.Parse(flagArgs); err != nil {
 		return nil, err
 	}
+	// Precedence: --style flag, then DEPBISECT_STYLE, then the modern default.
+	if styleName == "" {
+		styleName = os.Getenv("DEPBISECT_STYLE")
+	}
+	if styleName == "" {
+		styleName = "modern"
+	}
+	style, err := parseOutputStyle(styleName)
+	if err != nil {
+		return nil, err
+	}
+	opts.style = style
 	if extra := fs.Args(); len(extra) > 0 {
 		return nil, fmt.Errorf("unexpected argument %q before %q (the verification command goes after the separator)", extra[0], "--")
 	}
@@ -227,7 +244,7 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 	if opts.quiet {
 		progressWriter = io.Discard
 	}
-	progressOutput := newProgress(progressWriter, opts.verbose)
+	progressOutput := newProgress(progressWriter, opts.verbose, opts.style)
 	eng := &engine.Engine{
 		Git: git,
 		NewInstaller: func(m pm.Manager) engine.Installer {
@@ -292,7 +309,7 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 		}
 	}
 
-	printSummary(stdout, res, mdPath, jsonPath)
+	printSummary(stdout, res, mdPath, jsonPath, opts.style)
 	return exitCodeFor(res.Outcome)
 }
 

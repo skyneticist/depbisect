@@ -25,7 +25,41 @@ const (
 	ansiGreen  = "\x1b[1;32m"
 	ansiRed    = "\x1b[1;31m"
 	ansiYellow = "\x1b[1;33m"
+	ansiGray   = "\x1b[90m"
 )
+
+// Glyphs used by the modern style. They render only when color is active,
+// which in practice means a real terminal; classic output stays glyph-free.
+const (
+	glyphOK     = "✓"
+	glyphFail   = "✗"
+	glyphActive = "↻"
+	glyphArrow  = "→"
+)
+
+// outputStyle selects how progress and the final summary are rendered.
+type outputStyle int
+
+const (
+	styleClassic outputStyle = iota // label-column layout (the original output)
+	styleModern                     // glyph lifecycle rows + dressed summary
+)
+
+// parseOutputStyle resolves a --style value. Callers handle the empty/default
+// case before calling; an unrecognized value is a usage error.
+func parseOutputStyle(name string) (outputStyle, error) {
+	switch name {
+	case "modern":
+		return styleModern, nil
+	case "classic":
+		return styleClassic, nil
+	default:
+		return styleClassic, fmt.Errorf("unknown --style %q (valid: modern, classic)", name)
+	}
+}
+
+// paint wraps s in an ANSI color and a reset.
+func paint(code, s string) string { return code + s + ansiReset }
 
 // progress prints phase updates to stderr. A TTY refreshes the active trial
 // in place; redirected output stays line-oriented for CI logs. Verbose mode
@@ -35,22 +69,41 @@ type progress struct {
 	verbose     bool
 	interactive bool
 	color       bool
+	style       outputStyle
 	activeTrial bool
+
+	// modern lifecycle state for the collapsed ddmin row.
+	ddminStart  time.Time
+	ddminTested int
+	barTick     int
 }
 
-func newProgress(w io.Writer, verbose bool) *progress {
+func newProgress(w io.Writer, verbose bool, style outputStyle) *progress {
 	interactive, color := terminalMode(w)
 	return &progress{
 		w:           w,
 		verbose:     verbose,
 		interactive: interactive,
 		color:       color,
+		style:       style,
 	}
 }
 
+// modernActive reports whether the modern renderer should drive progress.
+// It requires a colored, interactive terminal; verbose runs fall back to the
+// classic line-oriented output so subprocess streams stay readable.
+func (p *progress) modernActive() bool {
+	return p.style == styleModern && p.interactive && p.color && !p.verbose
+}
+
 func (p *progress) Step(label, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if p.modernActive() {
+		p.modernStep(label, msg)
+		return
+	}
 	p.clearActiveTrial()
-	writeStatus(p.w, label, fmt.Sprintf(format, args...), p.color, ansiCyan, true)
+	writeStatus(p.w, label, msg, p.color, ansiCyan, true)
 }
 
 func (p *progress) Detail(format string, args ...any) {
@@ -62,6 +115,10 @@ func (p *progress) Detail(format string, args ...any) {
 }
 
 func (p *progress) Trial(number int, role string, applied, total int, phase string, elapsed time.Duration) {
+	if p.modernActive() {
+		p.modernTrial(role, total, phase)
+		return
+	}
 	roleLabel := trialRoleLabel(role)
 	scope := fmt.Sprintf("%s | %d/%d changes", roleLabel, applied, total)
 
@@ -107,6 +164,122 @@ func (p *progress) clearActiveTrial() {
 	}
 	fmt.Fprint(p.w, "\r\x1b[2K")
 	p.activeTrial = false
+}
+
+// modernStep handles engine phase markers in the modern style. Most markers
+// are implied by the glyph rows and stay silent; only the bisect completion
+// finalizes the live ddmin row.
+func (p *progress) modernStep(label, msg string) {
+	switch label {
+	case "Complete":
+		p.clearActiveTrial()
+		color := ansiGreen
+		if strings.Contains(msg, "not proven") {
+			color = ansiYellow
+		}
+		p.writeModernRow(glyphOK, color, "ddmin", paint(ansiGray, msg))
+	case "Resume":
+		p.clearActiveTrial()
+		p.writeModernRow(glyphActive, ansiCyan, "resume", paint(ansiGray, msg))
+	}
+}
+
+// modernTrial collapses the per-trial lifecycle into three rows: baseline,
+// reproduced, and a single live ddmin row that refreshes in place.
+func (p *progress) modernTrial(role string, total int, phase string) {
+	switch role {
+	case "baseline-old", "baseline-new":
+		if isLivePhase(phase) {
+			p.refreshBaselineWorking(role, phase)
+			return
+		}
+		p.finalizeBaseline(role, total, phase)
+	default: // candidate, minimality-check
+		if p.ddminStart.IsZero() {
+			p.ddminStart = time.Now()
+		}
+		if !isLivePhase(phase) {
+			p.ddminTested++
+		}
+		p.refreshDdmin()
+	}
+}
+
+func isLivePhase(phase string) bool {
+	return phase == "preparing" || phase == "installing" || phase == "verifying"
+}
+
+func modernRoleLabel(role string) string {
+	if role == "baseline-new" {
+		return "reproduced"
+	}
+	return "baseline"
+}
+
+func (p *progress) refreshBaselineWorking(role, phase string) {
+	p.clearActiveTrial()
+	fmt.Fprintf(p.w, "%s %-11s %s",
+		paint(ansiCyan, glyphActive), modernRoleLabel(role), paint(ansiGray, phase+"…"))
+	p.activeTrial = true
+}
+
+func (p *progress) finalizeBaseline(role string, total int, phase string) {
+	p.clearActiveTrial()
+	verb := "reverted"
+	if role == "baseline-new" {
+		verb = "applied"
+	}
+	scope := fmt.Sprintf("%d updates %s", total, verb)
+	glyph, color, verdict := glyphOK, ansiGreen, paint(ansiGreen, "tests pass")
+	if phase != "pass" {
+		glyph, color, verdict = glyphFail, ansiRed, paint(ansiRed, "tests fail")
+	}
+	msg := paint(ansiGray, scope) + " " + paint(ansiGray, glyphArrow) + " " + verdict
+	if trialExpectation(role, phase) == "unexpected" {
+		msg += " " + paint(ansiYellow, "(unexpected)")
+	}
+	p.writeModernRow(glyph, color, modernRoleLabel(role), msg)
+}
+
+func (p *progress) refreshDdmin() {
+	p.clearActiveTrial()
+	elapsed := formatDuration(time.Since(p.ddminStart))
+	status := fmt.Sprintf("%s %d tested · %s",
+		paint(ansiCyan, "isolating…"), p.ddminTested, paint(ansiGray, elapsed))
+	bar := ""
+	if terminalLineWidth(p.w) >= 60 {
+		bar = p.indeterminateBar(12) + " "
+	}
+	fmt.Fprintf(p.w, "%s %-11s %s%s",
+		paint(ansiCyan, glyphActive), "ddmin", bar, status)
+	p.activeTrial = true
+	p.barTick++
+}
+
+// indeterminateBar renders a moving "comet" since ddmin cannot know how many
+// probes remain; it conveys activity, not a percentage.
+func (p *progress) indeterminateBar(width int) string {
+	const comet = 3
+	pos := p.barTick % width
+	var b strings.Builder
+	for i := 0; i < width; i++ {
+		lit := false
+		for c := 0; c < comet; c++ {
+			if (pos+c)%width == i {
+				lit = true
+			}
+		}
+		if lit {
+			b.WriteString(paint(ansiCyan, "█"))
+		} else {
+			b.WriteString(paint(ansiGray, "░"))
+		}
+	}
+	return b.String()
+}
+
+func (p *progress) writeModernRow(glyph, glyphColor, label, msg string) {
+	fmt.Fprintf(p.w, "%s %-11s %s\n", paint(glyphColor, glyph), label, msg)
 }
 
 func outcomeColor(outcome string) string {
@@ -155,9 +328,15 @@ func trialExpectation(role, outcome string) string {
 	return "unexpected"
 }
 
-// printSummary writes the final human-readable result to stdout.
-func printSummary(w io.Writer, res *engine.Result, mdPath, jsonPath string) {
+// printSummary writes the final human-readable result to stdout. The modern
+// style renders only when color is active; otherwise (redirected output, CI,
+// NO_COLOR) it falls back to the classic layout so logs stay plain and stable.
+func printSummary(w io.Writer, res *engine.Result, mdPath, jsonPath string, style outputStyle) {
 	_, color := terminalMode(w)
+	if style == styleModern && color {
+		printModernSummary(w, res, mdPath, jsonPath)
+		return
+	}
 	fmt.Fprintln(w)
 	writeStatus(w, "Result", outcomeHeadline(res.Outcome), color, resultColor(res.Outcome), true)
 
@@ -214,6 +393,93 @@ func printSummary(w io.Writer, res *engine.Result, mdPath, jsonPath string) {
 		writeStatus(w, "Report", mdPath, color, ansiCyan, true)
 	case jsonPath != "":
 		writeStatus(w, "JSON", jsonPath, color, ansiCyan, true)
+	}
+}
+
+// printModernSummary renders the dressed report: a glyph headline, the
+// colored culprit set, a rule, then a lowercase fact column.
+func printModernSummary(w io.Writer, res *engine.Result, mdPath, jsonPath string) {
+	glyph, glyphColor := summaryGlyph(res.Outcome)
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "%s %s\n", paint(glyphColor, glyph), paint(ansiBold, outcomeHeadline(res.Outcome)))
+
+	switch res.Outcome {
+	case engine.OutcomeMinimalFound:
+		writeModernChanges(w, "minimal set", res.Minimal)
+	case engine.OutcomeInconclusive:
+		if len(res.Minimal) > 0 {
+			writeModernChanges(w, "best-known failing set", res.Minimal)
+		}
+	case engine.OutcomeDryRun:
+		writeModernChanges(w, "dependency changes", res.Changes)
+	}
+
+	if res.OutcomeDetail != "" && res.Outcome != engine.OutcomeMinimalFound {
+		fmt.Fprintf(w, "\n%s\n", paint(ansiGray, sentenceCase(res.OutcomeDetail)))
+	}
+
+	facts := make([][2]string, 0, 10)
+	add := func(label, value string) { facts = append(facts, [2]string{label, value}) }
+	if len(res.Command) > 0 {
+		add("command", formatCommand(res.Command))
+	}
+	if manager := managerLabel(res); manager != "" {
+		add("manager", manager)
+	}
+	if res.Outcome == engine.OutcomeMinimalFound {
+		add("evidence", fmt.Sprintf("%d / %d failing runs · certified minimal",
+			res.Confidence.Failures, res.Confidence.Runs))
+	}
+	add("changes", fmt.Sprintf("%d analyzed", len(res.Changes)))
+	if len(res.Trials) > 0 {
+		add("trials", strconv.Itoa(len(res.Trials)))
+	}
+	if duration := res.FinishedAt.Sub(res.StartedAt); !res.StartedAt.IsZero() && duration > 0 {
+		add("duration", formatDuration(duration))
+	}
+	for _, d := range res.Diagnostics {
+		add("note", paint(ansiYellow, d))
+	}
+	if res.KeptWorktree != "" {
+		add("worktree", res.KeptWorktree)
+	}
+	if mdPath != "" {
+		add("report", paint(ansiCyan, mdPath))
+	}
+	if jsonPath != "" {
+		add("json", paint(ansiCyan, jsonPath))
+	}
+	add("outcome", res.Outcome)
+
+	fmt.Fprintf(w, "\n%s\n", paint(ansiGray, strings.Repeat("─", 44)))
+	for _, f := range facts {
+		fmt.Fprintf(w, "  %s %s\n", paint(ansiGray, fmt.Sprintf("%-9s", f[0])), f[1])
+	}
+}
+
+// writeModernChanges lists dependency changes with the name highlighted and the
+// version arrow dimmed, matching the live ddmin culprit styling.
+func writeModernChanges(w io.Writer, title string, changes []manifest.Change) {
+	if len(changes) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\n  %s\n", paint(ansiGray, title))
+	for _, change := range changes {
+		text := change.String()
+		text = strings.Replace(text, "->", paint(ansiGray, glyphArrow), 1)
+		text = strings.Replace(text, change.Name, paint(ansiRed, change.Name), 1)
+		fmt.Fprintf(w, "    %s %s\n", paint(ansiRed, glyphFail), text)
+	}
+}
+
+func summaryGlyph(outcome string) (glyph, color string) {
+	switch outcome {
+	case engine.OutcomeMinimalFound, engine.OutcomeNotReproduced:
+		return glyphOK, ansiGreen
+	case engine.OutcomeDryRun:
+		return glyphArrow, ansiCyan
+	default:
+		return glyphActive, ansiYellow
 	}
 }
 
