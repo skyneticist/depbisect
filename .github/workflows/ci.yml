@@ -131,7 +131,7 @@ jobs:
             }
             console.log("complex demo verified:", actual.join(", "), "reproduced 3/3");
           '
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: demo-reports-${{ matrix.os }}
