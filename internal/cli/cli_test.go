@@ -35,6 +35,7 @@ func TestUsageErrors(t *testing.T) {
 		{"negative install timeout", []string{"run", "--base", "main", "--install-timeout", "-1s", "--", "x"}, "--install-timeout"},
 		{"negative overall timeout", []string{"run", "--base", "main", "--overall-timeout", "-1s", "--", "x"}, "--overall-timeout"},
 		{"quiet and verbose", []string{"run", "--base", "main", "--quiet", "--verbose", "--", "x"}, "--quiet"},
+		{"bad style", []string{"run", "--base", "main", "--style", "fancy", "--", "x"}, "--style"},
 		{"unknown flag", []string{"run", "--base", "main", "--bogus", "--", "x"}, "bogus"},
 		{"completion unknown shell", []string{"completion", "fish"}, "fish"},
 	}
@@ -145,6 +146,9 @@ func TestCompletionCommands(t *testing.T) {
 		if !strings.Contains(stdout, "--quiet") {
 			t.Errorf("%s completion is missing --quiet:\n%s", shell, stdout)
 		}
+		if !strings.Contains(stdout, "--style") {
+			t.Errorf("%s completion is missing --style:\n%s", shell, stdout)
+		}
 	}
 }
 
@@ -153,7 +157,7 @@ func TestHelp(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit = %d, stderr=%q", code, stderr)
 	}
-	for _, want := range []string{"run", "--base", "--runs", "--run-timeout", "--install-timeout", "--overall-timeout", "--dry-run", "--quiet", "--keep-worktrees", "--checkpoint", "--resume", "Exit codes", "--"} {
+	for _, want := range []string{"run", "--base", "--runs", "--run-timeout", "--install-timeout", "--overall-timeout", "--dry-run", "--quiet", "--style", "--keep-worktrees", "--checkpoint", "--resume", "Exit codes", "--"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("help missing %q", want)
 		}
@@ -191,7 +195,7 @@ func TestSummaryMinimalFound(t *testing.T) {
 		Confidence: engine.Confidence{Failures: 3, Runs: 3},
 	}
 	var buf bytes.Buffer
-	printSummary(&buf, res, "depbisect-report.md", "")
+	printSummary(&buf, res, "depbisect-report.md", "", styleClassic)
 	got := buf.String()
 	for _, want := range []string{
 		"Result Minimal breaking dependency set found",
@@ -215,7 +219,7 @@ func TestSummaryOtherOutcomes(t *testing.T) {
 		Diagnostics:   []string{"something noteworthy"},
 	}
 	var buf bytes.Buffer
-	printSummary(&buf, res, "", "")
+	printSummary(&buf, res, "", "", styleClassic)
 	got := buf.String()
 	if !strings.Contains(got, "Result No breaking dependency update reproduced the failure") ||
 		!strings.Contains(got, "Reason The command passed 3/3 runs") ||
@@ -235,7 +239,7 @@ func TestSummaryInconclusiveBestKnownSet(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	printSummary(&buf, res, "", "")
+	printSummary(&buf, res, "", "", styleClassic)
 	got := buf.String()
 	for _, want := range []string{"Best-known failing set", "alpha 1 -> 2", "not proven 1-minimal"} {
 		if !strings.Contains(got, want) {
@@ -244,9 +248,114 @@ func TestSummaryInconclusiveBestKnownSet(t *testing.T) {
 	}
 }
 
+func TestParseRunStyle(t *testing.T) {
+	t.Setenv("DEPBISECT_STYLE", "")
+
+	opts, err := parseRunArgs([]string{"--base", "main", "--", "x"})
+	if err != nil || opts.style != styleModern {
+		t.Fatalf("default style = %v, err = %v; want modern", opts.style, err)
+	}
+
+	opts, err = parseRunArgs([]string{"--base", "main", "--style", "classic", "--", "x"})
+	if err != nil || opts.style != styleClassic {
+		t.Fatalf("--style classic = %v, err = %v", opts.style, err)
+	}
+
+	t.Setenv("DEPBISECT_STYLE", "classic")
+	opts, err = parseRunArgs([]string{"--base", "main", "--", "x"})
+	if err != nil || opts.style != styleClassic {
+		t.Fatalf("env style = %v, err = %v; want classic", opts.style, err)
+	}
+
+	opts, err = parseRunArgs([]string{"--base", "main", "--style", "modern", "--", "x"})
+	if err != nil || opts.style != styleModern {
+		t.Fatalf("flag should override env: style = %v, err = %v", opts.style, err)
+	}
+
+	if _, err := parseRunArgs([]string{"--base", "main", "--style", "fancy", "--", "x"}); err == nil {
+		t.Fatal("invalid --style should error")
+	}
+}
+
+func TestModernSummaryRendersGlyphsWhenColored(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("CLICOLOR", "")
+	t.Setenv("CLICOLOR_FORCE", "1")
+	t.Setenv("TERM", "")
+
+	res := &engine.Result{
+		Outcome: engine.OutcomeMinimalFound,
+		Command: []string{"npm", "test"},
+		Changes: make([]manifest.Change, 43),
+		Minimal: []manifest.Change{
+			{Name: "esbuild", Section: manifest.Dependencies, Kind: manifest.Updated,
+				OldSpec: "0.20.2", NewSpec: "0.21.0"},
+		},
+		Confidence: engine.Confidence{Failures: 3, Runs: 3},
+	}
+	var buf bytes.Buffer
+	printSummary(&buf, res, "depbisect-report.md", "depbisect-report.json", styleModern)
+	got := buf.String()
+	for _, want := range []string{
+		glyphOK, "Minimal breaking dependency set found",
+		"minimal set", glyphFail, "esbuild", glyphArrow,
+		"certified minimal", "command", "43 analyzed", ansiCyan,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("modern summary missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestModernSummaryFallsBackToClassicWithoutColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "1") // force color off even though style is modern
+	res := &engine.Result{
+		Outcome: engine.OutcomeMinimalFound,
+		Changes: make([]manifest.Change, 3),
+		Minimal: []manifest.Change{{Name: "esbuild", Section: manifest.Dependencies,
+			Kind: manifest.Updated, OldSpec: "1", NewSpec: "2"}},
+		Confidence: engine.Confidence{Failures: 1, Runs: 1},
+	}
+	var buf bytes.Buffer
+	printSummary(&buf, res, "", "", styleModern)
+	got := buf.String()
+	if !strings.Contains(got, "Result Minimal breaking dependency set found") {
+		t.Errorf("modern without color should use classic layout:\n%s", got)
+	}
+	if strings.ContainsAny(got, "\x1b") {
+		t.Errorf("plain fallback must not emit ANSI:\n%q", got)
+	}
+}
+
+func TestModernProgressCollapsesLifecycle(t *testing.T) {
+	var buf bytes.Buffer
+	p := &progress{w: &buf, interactive: true, color: true, style: styleModern}
+	p.Trial(1, "baseline-old", 0, 43, "preparing", 0)
+	p.Trial(1, "baseline-old", 0, 43, "pass", 2*time.Second)
+	p.Trial(2, "baseline-new", 43, 43, "preparing", 0)
+	p.Trial(2, "baseline-new", 43, 43, "fail", 2*time.Second)
+	p.Trial(3, "candidate", 20, 43, "preparing", 0)
+	p.Trial(3, "candidate", 20, 43, "fail", time.Second)
+	p.Step("Complete", "minimal failing set contains 1 of 43 changes")
+
+	got := buf.String()
+	for _, want := range []string{
+		"baseline", "reproduced", "ddmin",
+		"tests pass", "tests fail", "isolating",
+		glyphOK, glyphFail, "1 of 43",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("modern progress missing %q:\n%q", want, got)
+		}
+	}
+	if !strings.Contains(got, "\r\x1b[2K") {
+		t.Errorf("modern progress should refresh in place:\n%q", got)
+	}
+}
+
 func TestProgressFormatsTrialLifecycle(t *testing.T) {
 	var buf bytes.Buffer
-	p := newProgress(&buf, true)
+	p := newProgress(&buf, true, styleClassic)
 	p.Trial(7, "candidate", 2, 10, "preparing", 0)
 	p.Trial(7, "candidate", 2, 10, "installing", 1200*time.Millisecond)
 	p.Trial(7, "candidate", 2, 10, "verifying", 3200*time.Millisecond)
@@ -266,7 +375,7 @@ func TestProgressFormatsTrialLifecycle(t *testing.T) {
 
 func TestProgressDefaultCompactsTrialLifecycle(t *testing.T) {
 	var buf bytes.Buffer
-	p := newProgress(&buf, false)
+	p := newProgress(&buf, false, styleClassic)
 	p.Trial(1, "baseline-old", 0, 10, "preparing", 0)
 	p.Trial(1, "baseline-old", 0, 10, "installing", time.Second)
 	p.Trial(1, "baseline-old", 0, 10, "verifying", 2*time.Second)
@@ -328,7 +437,7 @@ func TestProgressInteractiveRefreshesActiveTrial(t *testing.T) {
 
 func TestProgressMarksUnexpectedBaselineOutcome(t *testing.T) {
 	var buf bytes.Buffer
-	p := newProgress(&buf, false)
+	p := newProgress(&buf, false, styleClassic)
 	p.Trial(2, "baseline-new", 10, 10, "pass", 3*time.Second)
 
 	got := buf.String()
