@@ -13,22 +13,22 @@
 Output docs/demo.gif
 
 Set Shell bash
-Set FontSize 18
-Set Width 1100
-Set Height 700
+Set FontSize 16
+Set Width 1700
+Set Height 720
 Set Padding 24
 Set Theme "Dracula"
-Set TypingSpeed 55ms
+Set TypingSpeed 75ms
 
 # --- Setup (hidden): build the binary and generate the demo repo ---
 Hide
-Type "./examples/make-demo.sh >/dev/null 2>&1 && go build -o depbisect ./cmd/depbisect && clear"
+Type "./examples/make-demo-complex.sh >/dev/null 2>&1 && go build -o depbisect ./cmd/depbisect && clear"
 Enter
 Sleep 25s
 Show
 
 # --- The actual run ---
-Type "./depbisect run --repo examples/demo/app --base HEAD~1 --runs 3 -- node test.js"
+Type "./depbisect run --repo examples/demo-complex/app --base HEAD~1 --runs 3 -- node test.js"
 Sleep 600ms
 Enter
-Sleep 12s
+Sleep 15s
