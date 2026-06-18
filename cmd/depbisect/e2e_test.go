@@ -363,6 +363,37 @@ func TestE2EFindsCulpritNpm(t *testing.T) {
 	assertTmpEmpty(t, tmpDir)
 }
 
+// TestE2EParallelFindsCulpritNpm runs the bisection across three real git
+// worktrees concurrently (-j3), proving the worktree pool, concurrent installs,
+// and concurrent verification all work end-to-end and clean up afterward.
+func TestE2EParallelFindsCulpritNpm(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	node := requireTools(t)
+	r := initRepo(t, "npm")
+	stubDir, logPath := stubPM(t)
+	tmpDir, outDir := t.TempDir(), t.TempDir()
+
+	before := snapshot(t, r.dir)
+	res := runBin(t, r, outDir, tmpDir, stubDir, logPath,
+		"run", "--repo", r.dir, "--base", r.first, "--jobs", "3", "--runs", "3", "--",
+		node, "-e", failIfLeftpad2)
+
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	for _, want := range []string{"Breaking dependencies", "leftpad 1.0.0 -> 2.0.0", "Evidence 3/3 failing runs"} {
+		if !strings.Contains(res.stdout, want) {
+			t.Errorf("stdout missing %q:\n%s", want, res.stdout)
+		}
+	}
+	// All lanes installed via npm; the repo and its worktree list are pristine.
+	if log, _ := os.ReadFile(logPath); !strings.Contains(string(log), "npm install") {
+		t.Errorf("pm log:\n%s", log)
+	}
+	assertRepoUntouched(t, r, before)
+	assertTmpEmpty(t, tmpDir)
+}
+
 func TestE2EFindsCulpritPnpm(t *testing.T) {
 	node := requireTools(t)
 	r := initRepo(t, "pnpm")

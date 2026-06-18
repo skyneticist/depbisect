@@ -11,6 +11,11 @@ All notable changes to this project are documented here. The format follows
 - Windows support, including native CI coverage, npm/pnpm batch-shim handling,
   prompt subprocess cancellation, and amd64/arm64 release archives.
 - `--quiet` to suppress progress while retaining the final result.
+- `--jobs` / `-j` to evaluate candidate trials in parallel, each in its own
+  isolated worktree. The minimized set is identical at any job count; the
+  verification command must be safe to run concurrently. Each ddmin
+  granularity level is now evaluated as a batch, so a pool of worktrees can
+  test candidates concurrently while preserving 1-minimality.
 
 ### Changed
 

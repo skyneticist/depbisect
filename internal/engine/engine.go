@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/skyneticist/depbisect/internal/ddmin"
 	"github.com/skyneticist/depbisect/internal/execx"
 	"github.com/skyneticist/depbisect/internal/manifest"
 	"github.com/skyneticist/depbisect/internal/pm"
@@ -94,6 +93,11 @@ type Options struct {
 	// OverallTimeout bounds the bisection itself. Cleanup uses a separate
 	// bounded context so it can still run after this deadline.
 	OverallTimeout time.Duration
+	// Jobs is the number of candidate trials to evaluate concurrently, each
+	// in its own isolated worktree. Values < 1 mean 1 (sequential). Parallel
+	// evaluation requires the verification command to be safe to run
+	// concurrently; the minimized result is identical regardless of Jobs.
+	Jobs int
 }
 
 // Trial records one executed candidate evaluation.
@@ -212,6 +216,14 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	runs := opts.Runs
 	if runs < 1 {
 		runs = 1
+	}
+	jobs := opts.Jobs
+	if jobs < 1 {
+		jobs = 1
+	}
+	if jobs > 1 {
+		// Serialize progress writes/state across concurrent lanes.
+		progress = &syncProgress{p: progress}
 	}
 	if opts.OverallTimeout > 0 {
 		var cancel context.CancelFunc
@@ -374,119 +386,79 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		checkpointActive = true
 	}
 
-	// Phase 4: set up the isolated worktree.
+	// Phase 4: set up the isolated worktree pool. Lane count never exceeds the
+	// number of changes, since no batch evaluates more subsets than that.
+	laneCount := jobs
+	if laneCount > len(changes) {
+		laneCount = len(changes)
+	}
+	if laneCount < 1 {
+		laneCount = 1
+	}
 	parent, err := mkdirTemp()
 	if err != nil {
 		return fail(fmt.Errorf("create temporary directory: %w", err))
 	}
-	wt := filepath.Join(parent, "worktree")
-	if err := e.Git.AddWorktree(ctx, wt, toSHA); err != nil {
-		os.RemoveAll(parent)
-		return fail(err)
+	dirs := make([]string, 0, laneCount)
+	for i := 0; i < laneCount; i++ {
+		// A single lane keeps the original directory name for stable output.
+		dir := filepath.Join(parent, "worktree")
+		if laneCount > 1 {
+			dir = filepath.Join(parent, fmt.Sprintf("worktree-%d", i))
+		}
+		if err := e.Git.AddWorktree(ctx, dir, toSHA); err != nil {
+			for _, created := range dirs {
+				e.removeWorktree(created, progress)
+			}
+			os.RemoveAll(parent)
+			return fail(err)
+		}
+		dirs = append(dirs, dir)
 	}
 	defer func() {
 		cleanupStart := now()
-		e.cleanup(parent, wt, opts.KeepWorktrees, res, progress)
+		e.cleanup(parent, dirs, opts.KeepWorktrees, res, progress)
 		cleanupEnd := now()
 		res.CleanupDuration = cleanupEnd.Sub(cleanupStart)
 		res.FinishedAt = cleanupEnd.UTC()
 	}()
-	progress.Detail("Created worktree at %s", wt)
+	if laneCount == 1 {
+		progress.Detail("Created worktree at %s", dirs[0])
+	} else {
+		progress.Detail("Created %d worktrees under %s", laneCount, parent)
+	}
 
-	// Phase 5: evaluate candidates with memoization.
-	runSubset := func(subset []manifest.Change, role string, stopOnPass bool) (Trial, error) {
-		key := subsetKey(subset)
-		if cached, ok := memo[key]; ok {
-			return cached, nil
-		}
-		if err := ctx.Err(); err != nil {
-			return Trial{}, fmt.Errorf("bisection interrupted: %w", err)
-		}
-		trialNumber++
-		progress.Trial(trialNumber, role, len(subset), len(changes), "preparing", 0)
-		start := now()
-		if err := e.Git.ResetWorktree(ctx, wt, toSHA); err != nil {
-			return Trial{}, fmt.Errorf("prepare isolated trial worktree: %w", err)
-		}
-
-		applied := make(map[string]bool, len(subset))
-		trial := Trial{Role: role, Applied: make([]string, 0, len(subset))}
-		for _, c := range subset {
-			applied[c.ID()] = true
-			trial.Applied = append(trial.Applied, c.ID())
-		}
-		sort.Strings(trial.Applied)
-
-		rendered, err := manifest.Render(toPkg, changes, applied)
-		if err != nil {
-			return Trial{}, err
-		}
-		if err := os.WriteFile(filepath.Join(wt, manifestName), rendered, 0o644); err != nil {
-			return Trial{}, fmt.Errorf("write candidate manifest: %w", err)
-		}
-		afterPrepare := now()
-		trial.PrepareDuration = afterPrepare.Sub(start)
-		progress.Trial(trialNumber, role, len(subset), len(changes), "installing", trial.PrepareDuration)
-
-		installCtx := ctx
-		cancelInstall := func() {}
-		if opts.InstallTimeout > 0 {
-			installCtx, cancelInstall = context.WithTimeout(ctx, opts.InstallTimeout)
-		}
-		instRes, err := installer.Install(installCtx, wt, opts.Stream)
-		installContextErr := installCtx.Err()
-		cancelInstall()
-		afterInstall := now()
-		trial.InstallDuration = afterInstall.Sub(afterPrepare)
-		if err != nil {
-			if opts.InstallTimeout > 0 &&
-				errors.Is(installContextErr, context.DeadlineExceeded) &&
-				!errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return Trial{}, fmt.Errorf("dependency installation timed out after %s: %w",
-					opts.InstallTimeout, context.DeadlineExceeded)
-			}
-			return Trial{}, fmt.Errorf("install dependencies: %w", err)
-		}
-		if instRes.ExitCode != 0 {
-			trial.Outcome = "unresolved"
-			trial.Duration = afterInstall.Sub(start)
-			progress.Trial(trialNumber, role, len(subset), len(changes), trial.Outcome, trial.Duration)
-			progress.Detail("Install failed for %d applied changes (%s); candidate skipped",
-				len(subset), firstLine(instRes.Stderr))
-			if err := recordTrial(opts.Checkpoint, checkpointActive, memo, key, res, trial); err != nil {
-				return Trial{}, err
-			}
-			return trial, nil
-		}
-		progress.Trial(trialNumber, role, len(subset), len(changes), "verifying", afterInstall.Sub(start))
-		verdict, err := e.Verifier.Verify(ctx, wt, stopOnPass)
-		if err != nil {
-			return Trial{}, fmt.Errorf("run verification command: %w", err)
-		}
-		afterVerify := now()
-		trial.RunsExecuted = len(verdict.Runs)
-		trial.Failures = verdict.Failures
-		trial.VerifyDuration = afterVerify.Sub(afterInstall)
-		trial.Duration = afterVerify.Sub(start)
-		switch verdict.Classification() {
-		case verify.AlwaysFail:
-			trial.Outcome = "fail"
-		case verify.AlwaysPass:
-			trial.Outcome = "pass"
-		default:
-			trial.Outcome = "pass" // flaky: does not deterministically reproduce
-		}
-		progress.Trial(trialNumber, role, len(subset), len(changes), trial.Outcome, trial.Duration)
-		progress.Detail("Tested %d applied changes: %s (%s)", len(subset), trial.Outcome, verdict.String())
-		if err := recordTrial(opts.Checkpoint, checkpointActive, memo, key, res, trial); err != nil {
-			return Trial{}, err
-		}
-		return trial, nil
+	// Phase 5: build the candidate executor over the lane pool. Each lane is a
+	// free worktree index; eval acquires one for the duration of a trial.
+	lanes := make(chan int, laneCount)
+	for i := 0; i < laneCount; i++ {
+		lanes <- i
+	}
+	ex := &executor{
+		git:            e.Git,
+		installer:      installer,
+		verifier:       e.Verifier,
+		progress:       progress,
+		now:            now,
+		toSHA:          toSHA,
+		toPkg:          toPkg,
+		changes:        changes,
+		totalChanges:   len(changes),
+		stream:         opts.Stream,
+		installTimeout: opts.InstallTimeout,
+		jobs:           jobs,
+		lanes:          lanes,
+		dirs:           dirs,
+		memo:           memo,
+		res:            res,
+		trialNum:       trialNumber,
+		store:          opts.Checkpoint,
+		storeOn:        checkpointActive,
 	}
 
 	// Phase 6: baselines.
 	progress.Step("Baseline", "1/2 | without updates (expect PASS)")
-	oldTrial, err := runSubset(nil, "baseline-old", false)
+	oldTrial, err := ex.eval(ctx, nil, "baseline-old", false)
 	if err != nil {
 		return fail(err)
 	}
@@ -512,7 +484,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	progress.Step("Baseline", "2/2 | with all updates (expect FAIL)")
-	newTrial, err := runSubset(changes, "baseline-new", false)
+	newTrial, err := ex.eval(ctx, changes, "baseline-new", false)
 	if err != nil {
 		return fail(err)
 	}
@@ -539,22 +511,9 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		return finish()
 	}
 
-	// Phase 7: delta debugging.
+	// Phase 7: delta debugging plus a 1-minimality proof.
 	progress.Step("Bisect", "%d changes with ddmin", len(changes))
-	minimal, _, err := ddmin.Minimize(changes, func(subset []manifest.Change) (ddmin.Outcome, error) {
-		trial, err := runSubset(subset, "candidate", true)
-		if err != nil {
-			return ddmin.Unresolved, err
-		}
-		switch trial.Outcome {
-		case "fail":
-			return ddmin.Fail, nil
-		case "unresolved":
-			return ddmin.Unresolved, nil
-		default:
-			return ddmin.Pass, nil
-		}
-	})
+	bestKnown, uncertainNeighbors, err := ex.minimize(ctx, changes)
 	if err != nil {
 		return fail(err)
 	}
@@ -571,33 +530,8 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 				"if the minimal set looks wrong, increase --runs", flakyCandidates))
 	}
 
-	bestKnown := minimal
-	var uncertainNeighbors []string
-	for {
-		uncertainNeighbors = uncertainNeighbors[:0]
-		reduced := false
-		for i := range bestKnown {
-			neighbor := removeChange(bestKnown, i)
-			trial, err := runSubset(neighbor, "minimality-check", true)
-			if err != nil {
-				return fail(err)
-			}
-			if trial.Outcome == "fail" {
-				bestKnown = neighbor
-				reduced = true
-				break
-			}
-			if trial.Outcome == "unresolved" || (trial.Outcome == "pass" && trial.Failures > 0) {
-				uncertainNeighbors = append(uncertainNeighbors, bestKnown[i].ID())
-			}
-		}
-		if !reduced {
-			break
-		}
-	}
-
 	res.Minimal = bestKnown
-	final := memo[subsetKey(bestKnown)]
+	final := ex.lookup(bestKnown)
 	res.Confidence = Confidence{Failures: final.Failures, Runs: final.RunsExecuted}
 	for _, trial := range res.Trials {
 		if trial.Outcome == "unresolved" {
@@ -634,17 +568,6 @@ func countCandidateTrials(trials []Trial) int {
 		}
 	}
 	return count
-}
-
-func recordTrial(store CheckpointStore, checkpointActive bool, memo map[string]Trial, key string, res *Result, trial Trial) error {
-	memo[key] = trial
-	res.Trials = append(res.Trials, trial)
-	if checkpointActive {
-		if err := store.Append(trial); err != nil {
-			return fmt.Errorf("save checkpoint trial: %w", err)
-		}
-	}
-	return nil
 }
 
 func makeCheckpointFingerprint(baseSHA, toSHA string, manager pm.Manager, managerVersion string, command []string, runs int, changes []manifest.Change, context string) CheckpointFingerprint {
@@ -788,26 +711,44 @@ func (e *Engine) warnDirty(ctx context.Context, manager pm.Manager, res *Result)
 	}
 }
 
-// cleanup removes the engine-owned worktree and temp directory. It uses a
+// cleanup removes the engine-owned worktrees and temp directory. It uses a
 // fresh context so cleanup still happens after cancellation.
-func (e *Engine) cleanup(parent, wt string, keep bool, res *Result, progress Progress) {
+func (e *Engine) cleanup(parent string, dirs []string, keep bool, res *Result, progress Progress) {
 	if keep {
-		res.KeptWorktree = wt
-		res.Diagnostics = append(res.Diagnostics,
-			fmt.Sprintf("worktree kept at %s (remove with: git worktree remove --force %q)", wt, wt))
+		if len(dirs) > 0 {
+			res.KeptWorktree = dirs[0]
+			res.Diagnostics = append(res.Diagnostics,
+				fmt.Sprintf("worktree kept at %s (remove with: git worktree remove --force %q)", dirs[0], dirs[0]))
+		}
+		if len(dirs) > 1 {
+			// Extra lanes hold arbitrary candidates; remove all but the first.
+			res.Diagnostics = append(res.Diagnostics, fmt.Sprintf(
+				"%d worktrees were used for parallel trials; the kept one reflects an arbitrary candidate, not necessarily the minimal set",
+				len(dirs)))
+			for _, dir := range dirs[1:] {
+				e.removeWorktree(dir, progress)
+			}
+		}
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	if err := e.Git.RemoveWorktree(ctx, wt); err != nil {
-		// Fall back to direct deletion plus pruning of the stale entry.
-		os.RemoveAll(wt)
-		if err := e.Git.PruneWorktrees(ctx); err != nil {
-			progress.Detail("worktree prune failed: %v", err)
-		}
+	for _, dir := range dirs {
+		e.removeWorktree(dir, progress)
 	}
 	if err := os.RemoveAll(parent); err != nil {
 		progress.Detail("temp dir removal failed: %v", err)
+	}
+}
+
+// removeWorktree removes one engine-owned worktree, falling back to direct
+// deletion and pruning the stale administrative entry if git refuses.
+func (e *Engine) removeWorktree(dir string, progress Progress) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := e.Git.RemoveWorktree(ctx, dir); err != nil {
+		os.RemoveAll(dir)
+		if err := e.Git.PruneWorktrees(ctx); err != nil {
+			progress.Detail("worktree prune failed: %v", err)
+		}
 	}
 }
 

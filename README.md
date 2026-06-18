@@ -190,6 +190,7 @@ Common flags — run `depbisect help` for the complete list.
 | `--base <rev>`        | Base revision to compare against **(required)**                 |
 | `--to <rev>`          | Target revision (default `HEAD`)                                |
 | `--runs <n>`          | Verification runs per candidate; raises confidence on flaky tests (default `1`) |
+| `--jobs` / `-j <n>`   | Evaluate candidates in parallel, each in its own worktree (default `1`). Same minimal set at any value; the verification command must be safe to run concurrently |
 | `--dry-run`           | Show detected changes and plan, then exit without bisecting     |
 | `--resume`            | Resume completed trials from the checkpoint                     |
 | `--quiet` / `--verbose` | Print only the final result / stream all subprocess output    |

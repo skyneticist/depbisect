@@ -7,4 +7,4 @@ depbisect-report.json
 
 # Local launch/marketing scratch — not repo content
 docs/launch.md
-
+.DS_Store
