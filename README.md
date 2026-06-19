@@ -11,9 +11,9 @@
 
 You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 
-`git bisect` walks *commits* — it can't help when the breakage lives inside a single dependency-update commit. DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies declared in `package.json` between two revisions, then uses delta-debugging to isolate the exact subset responsible for the failure — all inside a throwaway worktree that never touches your checkout.
+`git bisect` walks *commits* — it can't help when the breakage lives inside a single dependency-update commit. DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies declared in `package.json` between two revisions, then applies [delta debugging](https://www.cs.purdue.edu/homes/xyzhang/fall07/Papers/delta-debugging.pdf) to isolate the exact subset responsible — all inside a throwaway worktree that never touches your checkout.
 
-![DepBisect narrowing 43 dependency changes down to the one that broke the build](docs/demo.gif)
+![DepBisect narrowing 12 dependency changes down to the 5-package set that broke the build](docs/demo.gif)
 
 ## Features
 
@@ -25,7 +25,7 @@ You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 - **CI-ready.** Meaningful exit codes (0–5), a schema-stable JSON report, and a reusable composite GitHub Action.
 - **Honest by design.** Lockfile-only changes, workspaces, and flaky baselines surface as clear diagnostics — DepBisect would rather say "inconclusive" than overstate certainty.
 
-> ⭐ **If DepBisect saves you a dependency-debugging session, please star it** — it's the main way other developers find the project.
+> ⭐ **Star the repo** if DepBisect saves you a debugging session — it's how other developers find it.
 
 ## Why DepBisect
 
@@ -43,7 +43,7 @@ You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 DepBisect ships as a single static binary — pick whichever method fits. You'll
 also need `git` and either `npm` or `pnpm` on your `PATH`.
 
-**npm / pnpm / yarn** — no Go toolchain required:
+**npm / pnpm** — no Go toolchain required:
 
 ```sh
 npm install -g depbisect                            # or: pnpm add -g depbisect
@@ -103,6 +103,17 @@ depbisect run --base origin/main --runs 3 -- npm test
 depbisect run --base origin/main --runs 3 --resume -- npm test
 ```
 
+**Preview before you commit to a run.** `--dry-run` resolves `--base..HEAD`, diffs the
+declared dependencies, and prints the plan — installing nothing and never running your
+command:
+
+![DepBisect's --dry-run listing the two changed dependencies and the bisection plan, then exiting without installing anything](docs/dry-run.gif)
+
+**Interrupt and pick up later.** Press Ctrl-C mid-bisection and DepBisect checkpoints the
+completed trials; re-run with `--resume` to restore them instead of starting over:
+
+![DepBisect interrupted with Ctrl-C partway through a bisection, then resumed with --resume, restoring the completed trials from the on-disk checkpoint](docs/resume.gif)
+
 > **No repo handy?** `./examples/make-demo.sh` builds a self-contained, offline demo
 > repository with a known culprit. See [examples/README.md](examples/README.md).
 
@@ -114,6 +125,8 @@ depbisect run --base main -- sh -c 'npm test 2>&1 | grep -v warn'
 ```
 
 ## How it works
+
+DepBisect frames a failing dependency update as a [delta debugging](https://www.cs.purdue.edu/homes/xyzhang/fall07/Papers/delta-debugging.pdf) problem: the input to minimize is the set of changed dependencies, and the test is your verification command. It runs Zeller and Hildebrandt's `ddmin` algorithm, then a one-by-one removal pass that certifies the result is *1-minimal*.
 
 ```text
   --base ─┐
@@ -197,6 +210,19 @@ Common flags — run `depbisect help` for the complete list.
 | `--pm <npm\|pnpm>`    | Force a package manager (default: detected from lockfile)       |
 | `--style <name>`      | Output style: `modern` (default) or `classic`; also set via `DEPBISECT_STYLE` |
 
+**`--jobs` in action.** Candidate subsets are independent, so DepBisect evaluates them
+across several isolated worktrees at once — the job count changes only *how fast* the
+search runs, never *what* it finds.
+
+Sequentially (`--jobs 1`), a single worktree works through the candidates one at a time:
+
+![DepBisect bisecting 28 dependency changes sequentially with --jobs 1 — one worktree, one candidate at a time — isolating the twelve-package culprit in 15.6 seconds](docs/sequential.gif)
+
+The same bisection with `--jobs 12` spreads those candidates across twelve worktrees,
+reaching the identical twelve-package result in roughly a third of the wall time:
+
+![The same 28-change bisection with --jobs 12 — twelve worktrees evaluating candidates concurrently — reaching the identical twelve-package result in 5.5 seconds](docs/parallel-only.gif)
+
 <details>
 <summary><b>Timeouts, checkpoints, reports, and environment</b></summary>
 
@@ -212,13 +238,12 @@ continue. Use `--checkpoint <path>` to relocate it, or `--checkpoint ""` to disa
 
 **Reports.** `--report-md` / `--report-json` set output paths; `--no-reports` writes none.
 
-**Output.** Two styles, selected with `--style` or the `DEPBISECT_STYLE` environment
-variable. `modern` (default) shows glyph lifecycle rows (`baseline` / `reproduced` /
-`ddmin`) and a dressed result summary; `classic` keeps the original label-column layout.
-Either way, output adapts to its destination: a terminal gets a width-aware, in-place
-active line, while redirected output (CI logs, pipes) stays plain and line-oriented — the
-modern styling is a terminal-only enhancement, so machine-readable output is unchanged.
-`NO_COLOR` and `CLICOLOR=0` disable color; `CLICOLOR_FORCE=1` forces it when redirected.
+**Output.** Two styles, set with `--style` or `DEPBISECT_STYLE`: `modern` (default) shows
+glyph lifecycle rows (`baseline` / `reproduced` / `ddmin`) and a dressed result summary;
+`classic` keeps the original label-column layout. Output adapts to its destination —
+terminals get a width-aware, in-place active line; redirected output (CI logs, pipes) stays
+plain and line-oriented, so machine-readable output is identical either way. `NO_COLOR` and
+`CLICOLOR=0` disable color; `CLICOLOR_FORCE=1` forces it when redirected.
 
 </details>
 

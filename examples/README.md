@@ -122,3 +122,29 @@ Breaking dependencies
 minimal set is identical at any job count (the verification command must be safe
 to run concurrently — these isolated worktrees are). Re-run `make-demo-jobs.sh`
 to reset the generated repository.
+
+## Largest parallel repository (`demo-swarm`)
+
+`make-demo-swarm.sh` generates the biggest bundled example at
+`examples/demo-swarm/`. Its second commit bumps **twenty-eight** packages across
+all three dependency sections. Twelve `replica-*` nodes model a wire-format
+migration that only loses quorum once **all twelve** reach the new version at the
+same time — while any single replica still speaks the old format, a translation
+shim keeps the tests green. The other sixteen `lib-*` bumps are harmless noise.
+
+It is `demo-jobs` taken further: a larger, twelve-package combination-locked
+culprit forces ddmin to evaluate the widest candidate batches of any example, so
+the wall-time gap between `--jobs 1` and a high job count is the most pronounced
+here. It is the example recorded for the README's parallel demo.
+
+```sh
+./examples/make-demo-swarm.sh
+go build ./cmd/depbisect
+
+# Sequential, then parallel — same twelve-package answer, much less wall time:
+./depbisect run --repo examples/demo-swarm/app --base HEAD~1 --runs 3 --jobs 1  -- node test.js
+./depbisect run --repo examples/demo-swarm/app --base HEAD~1 --runs 3 --jobs 12 -- node test.js
+```
+
+Both runs report the identical twelve-package minimal set (`replica-01` …
+`replica-12`). Re-run `make-demo-swarm.sh` to reset the generated repository.
