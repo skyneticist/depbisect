@@ -21,7 +21,7 @@ jobs:
   move-aliases:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Re-point major and minor tags
         env:
           TAG: ${{ github.ref_name }} # e.g. v1.2.3
