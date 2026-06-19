@@ -1,0 +1,33 @@
+# golangci-lint configuration (v2 schema).
+# Run locally with `make lint` or `golangci-lint run`.
+#
+# The enabled set is the standard linters (errcheck, govet, ineffassign,
+# staticcheck, unused) plus misspell. It is intentionally conservative: every
+# linter here is one the codebase already passes cleanly, so CI stays green and
+# new findings always point at the change under review. Add more linters
+# deliberately, verifying the tree is clean first.
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - misspell
+  settings:
+    errcheck:
+      # Conventionally-ignored returns: best-effort writes to terminals,
+      # best-effort cleanup, and process teardown in tests. Handling these
+      # would add noise without catching real bugs.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - os.RemoveAll
+        - (*os.File).Close
+        - (*os.File).Write
+        - (*os.Process).Kill
+    misspell:
+      locale: US
+
+formatters:
+  enable:
+    - gofmt

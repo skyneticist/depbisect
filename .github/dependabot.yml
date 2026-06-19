@@ -1,0 +1,33 @@
+version: 2
+updates:
+  # Go module dependencies.
+  #
+  # golang.org/x/term and golang.org/x/sys are deliberately held back: their
+  # current releases require Go >= 1.23, but DepBisect targets Go 1.20 (see
+  # go.mod). They are ignored here so Dependabot does not open PRs that cannot
+  # build. Security advisories for them are still surfaced by Dependabot's
+  # security updates, which this `ignore` block does not affect.
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+    groups:
+      go-modules:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: golang.org/x/term
+      - dependency-name: golang.org/x/sys
+
+  # GitHub Actions used by the workflows in .github/workflows.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      github-actions:
+        patterns: ["*"]

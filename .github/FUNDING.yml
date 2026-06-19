@@ -1,0 +1,9 @@
+# Funding links shown via the "Sponsor" button on the repository.
+# Uncomment and fill in only the platforms you actually use; an enabled but
+# unconfigured platform renders a broken button, so leave the rest commented.
+# Docs: https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+
+# github: [skyneticist]   # requires GitHub Sponsors to be enabled for the account
+# ko_fi: your-handle
+# buy_me_a_coffee: your-handle
+# custom: ["https://example.com/donate"]
