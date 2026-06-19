@@ -90,32 +90,82 @@ func TestInstallInvocation(t *testing.T) {
 	}
 }
 
-func TestVersion(t *testing.T) {
-	missing := errors.New("not found")
-	inst := Installer{Runner: execx.NewFake(), Manager: PNPM, LookPath: func(name string) (string, error) {
-		if name == "pnpm" {
-			return "", missing
-		}
-		return "/bin/" + name, nil
-	}}
-	_, err := inst.Version(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "pnpm") {
-		t.Errorf("err = %v, want mention of pnpm", err)
-	}
+// found is a LookPath stub that resolves any manager to a fake absolute path.
+func found(name string) (string, error) { return "/bin/" + name, nil }
 
-	inst.LookPath = func(name string) (string, error) { return "/bin/" + name, nil }
-	fake := execx.NewFake()
-	fake.Default.Result = execx.Result{Stdout: []byte("9.15.4\n")}
-	inst.Runner = fake
-	identity, err := inst.Version(context.Background())
-	if err != nil {
-		t.Fatal(err)
+func TestVersion(t *testing.T) {
+	cases := []struct {
+		name string
+		// lookPath stubs PATH resolution; nil means "found".
+		lookPath func(string) (string, error)
+		// stub configures the fake runner's response to `pnpm --version`.
+		stub func(*execx.Fake)
+		// wantID is the expected identity on success ("" when wantErr is set).
+		wantID string
+		// wantErr, when non-empty, is a substring the error must contain.
+		wantErr string
+	}{
+		{
+			name:   "reports identity from version output",
+			stub:   func(f *execx.Fake) { f.Default.Result = execx.Result{Stdout: []byte("9.15.4\n")} },
+			wantID: "pnpm 9.15.4",
+		},
+		{
+			name:     "not found on PATH",
+			lookPath: func(string) (string, error) { return "", errors.New("not found") },
+			wantErr:  "not found on PATH",
+		},
+		{
+			name:    "runner failure",
+			stub:    func(f *execx.Fake) { f.Default.Err = errors.New("spawn failed") },
+			wantErr: "inspect package manager",
+		},
+		{
+			name: "nonzero exit surfaces stderr",
+			stub: func(f *execx.Fake) {
+				f.Default.Result = execx.Result{ExitCode: 1, Stderr: []byte("corepack is disabled\n")}
+			},
+			wantErr: "corepack is disabled",
+		},
+		{
+			name:    "empty output is an error",
+			stub:    func(f *execx.Fake) { f.Default.Result = execx.Result{Stdout: []byte("   \n")} },
+			wantErr: "produced no output",
+		},
 	}
-	if identity != "pnpm 9.15.4" {
-		t.Errorf("identity = %q", identity)
-	}
-	call := fake.Calls()[0]
-	if !reflect.DeepEqual(call.Args, []string{"--version"}) || !call.AllowTrustedBatch {
-		t.Errorf("version command = %+v", call)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := execx.NewFake()
+			if tc.stub != nil {
+				tc.stub(fake)
+			}
+			lookPath := tc.lookPath
+			if lookPath == nil {
+				lookPath = found
+			}
+			inst := Installer{Runner: fake, Manager: PNPM, LookPath: lookPath}
+
+			id, err := inst.Version(context.Background())
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want substring %q", err, tc.wantErr)
+				}
+				// Every Version error names the offending manager.
+				if !strings.Contains(err.Error(), "pnpm") {
+					t.Errorf("err = %v, want mention of the manager", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if id != tc.wantID {
+				t.Errorf("identity = %q, want %q", id, tc.wantID)
+			}
+			call := fake.Calls()[0]
+			if !reflect.DeepEqual(call.Args, []string{"--version"}) || !call.AllowTrustedBatch {
+				t.Errorf("version command = %+v, want --version with AllowTrustedBatch", call)
+			}
+		})
 	}
 }
