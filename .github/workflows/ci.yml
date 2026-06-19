@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  quality:
-    name: Formatting, vet, and static analysis
+  lint:
+    name: Lint (golangci-lint)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -18,15 +18,43 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: stable
-      - name: gofmt
-        shell: bash
-        run: test -z "$(gofmt -l .)"
-      - name: go vet
-        run: go vet ./...
-      - name: staticcheck
+      # golangci-lint bundles gofmt, go vet, staticcheck, errcheck and more.
+      # The enabled set lives in .golangci.yml.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+
+  vuln:
+    name: Vulnerability scan (govulncheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: govulncheck
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
-          staticcheck ./...
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  fuzz:
+    name: Fuzz smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      # Short smoke run; the seed corpora also run as part of the test job.
+      # Lengthen -fuzztime, or move to a scheduled workflow, for deeper runs.
+      - name: Fuzz ddmin and the manifest parsers
+        run: |
+          go test -run='^$' -fuzz='^FuzzMinimize$' -fuzztime=30s ./internal/ddmin
+          go test -run='^$' -fuzz='^FuzzParsePackageJSON$' -fuzztime=30s ./internal/manifest
+          go test -run='^$' -fuzz='^FuzzParsePackageLock$' -fuzztime=30s ./internal/manifest
+          go test -run='^$' -fuzz='^FuzzParsePnpmLock$' -fuzztime=30s ./internal/manifest
 
   test:
     name: ${{ matrix.os }} / Go ${{ matrix.go }}

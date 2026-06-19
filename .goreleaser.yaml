@@ -24,6 +24,32 @@ checksum:
 
 changelog:
   use: github
+  sort: asc
+  # Conventional Commit subjects drive the grouping below; release-noise types
+  # and merge commits are dropped from the notes.
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^build:"
+      - "^style:"
+      - "^refactor:"
+      - "Merge pull request"
+      - "Merge branch"
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Performance
+      regexp: '^.*?perf(\(.+\))??!?:.+$'
+      order: 2
+    - title: Others
+      order: 999
 
 # The formula is always generated into dist/homebrew/; uploading it requires
 # the skyneticist/homebrew-tap repo to exist and a PAT with write access to it

@@ -118,7 +118,7 @@ func TestJSONIsValidAndStable(t *testing.T) {
 		first["verifyDurationMs"] != float64(4000) {
 		t.Errorf("first trial timings = %#v", first)
 	}
-	// Marshalling twice must be byte-identical.
+	// Marshaling twice must be byte-identical.
 	again, _ := New(fixtureResult(), "1.2.3").JSON()
 	if !bytes.Equal(got, again) {
 		t.Error("JSON output not deterministic")
