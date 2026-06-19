@@ -422,3 +422,23 @@ func TestChangeStringAndID(t *testing.T) {
 		t.Errorf("removed String() = %q", removed.String())
 	}
 }
+
+// TestChangeKindString pins the kind names. report.New writes Kind.String()
+// straight into the report JSON "kind" field (and the Markdown table renders it
+// too), so these are an output contract — a rename would corrupt every report.
+func TestChangeKindString(t *testing.T) {
+	cases := []struct {
+		kind ChangeKind
+		want string
+	}{
+		{Updated, "updated"},
+		{Added, "added"},
+		{Removed, "removed"},
+		{ChangeKind(99), "kind(99)"}, // out-of-range fallback
+	}
+	for _, tc := range cases {
+		if got := tc.kind.String(); got != tc.want {
+			t.Errorf("ChangeKind(%d).String() = %q, want %q", int(tc.kind), got, tc.want)
+		}
+	}
+}

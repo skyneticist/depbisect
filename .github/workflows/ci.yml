@@ -227,3 +227,37 @@ jobs:
         env:
           STEP_OUTCOME: ${{ steps.invalid.outcome }}
         run: test "$STEP_OUTCOME" = "failure"
+
+  docker-smoke:
+    name: Docker image behavior
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build the image
+        run: docker build -t depbisect:ci .
+      - name: Entry point prints usage
+        run: docker run --rm depbisect:ci help
+      - name: Bundled toolchain is functional
+        # depbisect drives git, node, npm and pnpm from inside the image, so a
+        # broken one silently defeats the image. pnpm regressed exactly this way
+        # once: corepack fetched a release too new for the image's Node and
+        # crashed on first use. Invoke each tool so any breakage fails CI.
+        run: |
+          docker run --rm --entrypoint sh depbisect:ci -eu -c '
+            git --version
+            node --version
+            npm --version
+            pnpm --version
+          '
+      - name: Generate demo fixture
+        run: ./examples/make-demo.sh
+      - name: Container completes a real bisection and finds the culprit
+        # Mount the workspace at its own path so the fixture's absolute file:
+        # dependencies resolve inside the container. A clean exit proves install
+        # and verification ran; the grep pins the identified culprit.
+        run: |
+          docker run --rm -v "$PWD:$PWD" -w "$PWD" depbisect:ci \
+            run --repo "$PWD/examples/demo/app" --base HEAD~1 --runs 3 \
+            -- node test.js | tee bisect.log
+          grep -q leftpad bisect.log
