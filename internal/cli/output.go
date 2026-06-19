@@ -16,6 +16,11 @@ import (
 const (
 	statusWidth = 12
 	outputWidth = 100
+	// modernLabelWidth is the label column for modern glyph rows. It is one
+	// narrower than statusWidth because a modern row prefixes the label with a
+	// status glyph and a space; deriving it from statusWidth keeps the two
+	// output styles from silently drifting apart.
+	modernLabelWidth = statusWidth - 1
 )
 
 const (
@@ -218,8 +223,8 @@ func modernRoleLabel(role string) string {
 
 func (p *progress) refreshBaselineWorking(role, phase string) {
 	p.clearActiveTrial()
-	fmt.Fprintf(p.w, "%s %-11s %s",
-		paint(ansiCyan, glyphActive), modernRoleLabel(role), paint(ansiGray, phase+"…"))
+	fmt.Fprintf(p.w, "%s %-*s %s",
+		paint(ansiCyan, glyphActive), modernLabelWidth, modernRoleLabel(role), paint(ansiGray, phase+"…"))
 	p.activeTrial = true
 }
 
@@ -250,8 +255,8 @@ func (p *progress) refreshDdmin() {
 	if terminalLineWidth(p.w) >= 60 {
 		bar = p.indeterminateBar(12) + " "
 	}
-	fmt.Fprintf(p.w, "%s %-11s %s%s",
-		paint(ansiCyan, glyphActive), "ddmin", bar, status)
+	fmt.Fprintf(p.w, "%s %-*s %s%s",
+		paint(ansiCyan, glyphActive), modernLabelWidth, "ddmin", bar, status)
 	p.activeTrial = true
 	p.barTick++
 }
@@ -279,7 +284,7 @@ func (p *progress) indeterminateBar(width int) string {
 }
 
 func (p *progress) writeModernRow(glyph, glyphColor, label, msg string) {
-	fmt.Fprintf(p.w, "%s %-11s %s\n", paint(glyphColor, glyph), label, msg)
+	fmt.Fprintf(p.w, "%s %-*s %s\n", paint(glyphColor, glyph), modernLabelWidth, label, msg)
 }
 
 func outcomeColor(outcome string) string {

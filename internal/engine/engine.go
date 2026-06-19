@@ -327,7 +327,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	progress.Step("Changes", "%s",
 		pluralize(len(changes), "direct dependency change", "direct dependency changes"))
 
-	e.warnDirty(ctx, manager, res)
+	e.warnDirty(ctx, res)
 
 	if len(changes) == 0 {
 		res.Outcome = OutcomeNoChanges
@@ -700,9 +700,12 @@ func (e *Engine) readLockfile(ctx context.Context, manager pm.Manager, sha, revL
 }
 
 // warnDirty surfaces uncommitted manifest/lockfile edits in the user's
-// working tree, which DepBisect deliberately ignores.
-func (e *Engine) warnDirty(ctx context.Context, manager pm.Manager, res *Result) {
-	for _, path := range []string{manifestName, manager.LockfileName()} {
+// working tree, which DepBisect deliberately ignores. Both lockfiles are
+// checked regardless of the detected/overridden manager, so forcing --pm on a
+// repo whose actual lockfile differs still surfaces a dirty lockfile. Probing a
+// path that does not exist is harmless: git status reports it as clean.
+func (e *Engine) warnDirty(ctx context.Context, res *Result) {
+	for _, path := range []string{manifestName, pm.NPM.LockfileName(), pm.PNPM.LockfileName()} {
 		dirty, err := e.Git.IsPathDirty(ctx, path)
 		if err == nil && dirty {
 			res.Diagnostics = append(res.Diagnostics, fmt.Sprintf(

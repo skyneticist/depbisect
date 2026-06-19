@@ -114,7 +114,7 @@ func (h Harness) Verify(ctx context.Context, dir string) (Verdict, error) {
 			return v, fmt.Errorf("verify: %w", err)
 		}
 		runCtx := ctx
-		cancel := context.CancelFunc(func() {})
+		cancel := func() {}
 		if h.Timeout > 0 {
 			runCtx, cancel = context.WithTimeout(ctx, h.Timeout)
 		}

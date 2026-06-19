@@ -10,7 +10,7 @@ import (
 
 // version is overridden at release time via:
 //
-//	go build -ldflags "-X main.version=v1.2.3"
+//	go build -ldflags "-X main.version=1.2.3"
 var version = "dev"
 
 func main() {

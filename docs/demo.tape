@@ -28,7 +28,9 @@ Sleep 25s
 Show
 
 # --- The actual run ---
-Type "./depbisect run --repo examples/demo-complex/app --base HEAD~1 --runs 3 -- node test.js"
+# --jobs 4 evaluates candidate subsets across four isolated worktrees in
+# parallel; the minimal set is identical to a sequential run, just found faster.
+Type "./depbisect run --repo examples/demo-complex/app --base HEAD~1 --runs 3 --jobs 4 -- node test.js"
 Sleep 600ms
 Enter
 Sleep 15s
