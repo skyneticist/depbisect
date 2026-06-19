@@ -52,6 +52,10 @@ Flags for run:
   --repo <path>         repository to operate on (default ".")
   --runs <n>            verification runs per candidate; raises confidence
                         for flaky tests (default 1)
+  --jobs, -j <n>        candidate trials to evaluate in parallel, each in its
+                        own worktree (default 1). The minimal set is identical
+                        at any value; requires the verification command to be
+                        safe to run concurrently (no shared ports/files/state)
   --run-timeout <dur>   timeout per verification run, e.g. 10m (default none)
   --install-timeout <dur>
                         timeout per dependency install (default none)
@@ -110,6 +114,7 @@ type runOptions struct {
 	to             string
 	repo           string
 	runs           int
+	jobs           int
 	runTimeout     time.Duration
 	installTimeout time.Duration
 	overallTimeout time.Duration
@@ -149,6 +154,8 @@ func parseRunArgs(args []string) (*runOptions, error) {
 	fs.StringVar(&opts.to, "to", "HEAD", "")
 	fs.StringVar(&opts.repo, "repo", ".", "")
 	fs.IntVar(&opts.runs, "runs", 1, "")
+	fs.IntVar(&opts.jobs, "jobs", 1, "")
+	fs.IntVar(&opts.jobs, "j", 1, "")
 	fs.DurationVar(&opts.runTimeout, "run-timeout", 0, "")
 	fs.DurationVar(&opts.installTimeout, "install-timeout", 0, "")
 	fs.DurationVar(&opts.overallTimeout, "overall-timeout", 0, "")
@@ -187,6 +194,9 @@ func parseRunArgs(args []string) (*runOptions, error) {
 	}
 	if opts.runs < 1 {
 		return nil, errors.New("--runs must be at least 1")
+	}
+	if opts.jobs < 1 {
+		return nil, errors.New("--jobs must be at least 1")
 	}
 	if opts.runTimeout < 0 {
 		return nil, errors.New("--run-timeout must not be negative")
@@ -265,6 +275,7 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 		ToRev:         opts.to,
 		Command:       opts.command,
 		Runs:          opts.runs,
+		Jobs:          opts.jobs,
 		PMOverride:    opts.pm,
 		KeepWorktrees: opts.keepWorktrees,
 		DryRun:        opts.dryRun,

@@ -433,6 +433,97 @@ func TestRunFindsInteractingPair(t *testing.T) {
 	}
 }
 
+func TestRunParallelMatchesSequentialSingleCulprit(t *testing.T) {
+	failBeta := func(deps map[string]string) bool { return deps["beta"] == "3.2.0" }
+
+	seqEnv := newEnv(t, threeChangeRepo(), failBeta, 3)
+	seqRes, err := seqEnv.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parEnv := newEnv(t, threeChangeRepo(), failBeta, 3)
+	parOpts := baseOpts()
+	parOpts.Jobs = 3
+	parRes, err := parEnv.eng.Run(context.Background(), parOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if parRes.Outcome != OutcomeMinimalFound {
+		t.Fatalf("parallel outcome = %q, diagnostics %v", parRes.Outcome, parRes.Diagnostics)
+	}
+	if got := ids(minimalNames(parRes)); got != "beta" {
+		t.Errorf("parallel minimal = %v, want [beta]", minimalNames(parRes))
+	}
+	if got, want := ids(minimalNames(parRes)), ids(minimalNames(seqRes)); got != want {
+		t.Errorf("parallel minimal %q != sequential %q", got, want)
+	}
+	if !parRes.MinimalityProven {
+		t.Error("parallel run did not prove minimality")
+	}
+	if parRes.Confidence != seqRes.Confidence {
+		t.Errorf("parallel confidence %+v != sequential %+v", parRes.Confidence, seqRes.Confidence)
+	}
+	// The pool created and cleaned up one worktree per lane (3 changes -> 3 lanes).
+	if len(parEnv.git.removed) != 3 {
+		t.Errorf("parallel worktrees removed = %d, want 3", len(parEnv.git.removed))
+	}
+	for _, d := range parEnv.tempDirs {
+		if _, err := os.Stat(d); !os.IsNotExist(err) {
+			t.Errorf("temp dir %s still exists", d)
+		}
+	}
+}
+
+func TestRunParallelFindsInteractingPair(t *testing.T) {
+	failPair := func(deps map[string]string) bool {
+		return deps["alpha"] == "1.1.0" && deps["gamma"] == "5.5.0"
+	}
+	env := newEnv(t, threeChangeRepo(), failPair, 1)
+	opts := baseOpts()
+	opts.Jobs = 4 // exceeds the 3 changes; lane count clamps to 3
+	res, err := env.eng.Run(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeMinimalFound {
+		t.Fatalf("outcome = %q, diagnostics %v", res.Outcome, res.Diagnostics)
+	}
+	if got := ids(minimalNames(res)); got != "alpha,gamma" {
+		t.Errorf("minimal = %v, want [alpha gamma]", minimalNames(res))
+	}
+	if len(env.git.removed) != 3 {
+		t.Errorf("worktrees removed = %d, want 3 (jobs clamped to changes)", len(env.git.removed))
+	}
+}
+
+// TestRunParallelDeterministicResult runs the same parallel bisection several
+// times; the minimal set must not depend on lane scheduling.
+func TestRunParallelDeterministicResult(t *testing.T) {
+	failPair := func(deps map[string]string) bool {
+		return deps["alpha"] == "1.1.0" && deps["gamma"] == "5.5.0"
+	}
+	var want string
+	for i := 0; i < 8; i++ {
+		env := newEnv(t, threeChangeRepo(), failPair, 1)
+		opts := baseOpts()
+		opts.Jobs = 3
+		res, err := env.eng.Run(context.Background(), opts)
+		if err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+		got := ids(minimalNames(res))
+		if i == 0 {
+			want = got
+			continue
+		}
+		if got != want {
+			t.Fatalf("run %d minimal = %q, want %q (nondeterministic under parallelism)", i, got, want)
+		}
+	}
+}
+
 func TestRunResetsWorktreeBeforeEveryExecutedTrial(t *testing.T) {
 	env := newEnv(t, threeChangeRepo(), func(deps map[string]string) bool {
 		return deps["beta"] == "3.2.0"

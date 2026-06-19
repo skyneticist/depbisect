@@ -152,6 +152,50 @@ func TestMinimizePropertyRandomConjunctive(t *testing.T) {
 	}
 }
 
+// fullBatch adapts a single-subset Test into a BatchTest that mimics a
+// parallel executor: it evaluates every subset in the batch (no early break)
+// and returns the lowest-indexed failure. Its result must match the sequential
+// executor's, even though it evaluates more subsets.
+func fullBatch[T any](test Test[T]) BatchTest[T] {
+	return func(subsets [][]T) (int, int, error) {
+		sel := -1
+		for i, subset := range subsets {
+			out, err := test(subset)
+			if err != nil {
+				return -1, len(subsets), err
+			}
+			if out == Fail && sel == -1 {
+				sel = i
+			}
+		}
+		return sel, len(subsets), nil
+	}
+}
+
+// TestMinimizeBatchMatchesSequential pins the core parallel-safety invariant:
+// evaluating a whole granularity level (as a parallel pool does) yields the
+// same minimized set as the sequential, early-breaking executor.
+func TestMinimizeBatchMatchesSequential(t *testing.T) {
+	rng := rand.New(rand.NewSource(7))
+	for trial := 0; trial < 300; trial++ {
+		n := 1 + rng.Intn(40)
+		k := 1 + rng.Intn(n)
+		culprits := append([]int(nil), rng.Perm(n)[:k]...)
+
+		seq, _, err := Minimize(ints(n), conjunctiveTest(culprits))
+		if err != nil {
+			t.Fatalf("trial %d: sequential: %v", trial, err)
+		}
+		par, _, err := MinimizeBatch(ints(n), fullBatch(conjunctiveTest(culprits)))
+		if err != nil {
+			t.Fatalf("trial %d: batch: %v", trial, err)
+		}
+		if !reflect.DeepEqual(seq, par) {
+			t.Fatalf("trial %d culprits=%v: sequential %v != batch %v", trial, culprits, seq, par)
+		}
+	}
+}
+
 func TestMinimizeUnresolvedTreatedAsNotFailing(t *testing.T) {
 	// Subsets of size < 3 are unresolved; failure needs culprits {1, 2}.
 	test := func(subset []int) (Outcome, error) {

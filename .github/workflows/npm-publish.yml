@@ -16,7 +16,8 @@ name: npm publish
 # parallel with the goreleaser release job.
 on:
   push:
-    tags: ["v*"]
+    # Exact release tags only — never the moving v0 / v0.1 aliases (see move-tags).
+    tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
       version:

@@ -131,6 +131,46 @@ jobs:
             }
             console.log("complex demo verified:", actual.join(", "), "reproduced 3/3");
           '
+      - name: Generate jobs example repo
+        run: ./examples/make-demo-jobs.sh
+      - name: Bisect the jobs example repo in parallel
+        run: |
+          ./depbisect run \
+            --repo examples/demo-jobs/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --jobs 4 \
+            --report-md depbisect-jobs-report.md \
+            --report-json depbisect-jobs-report.json \
+            -- node test.js
+      - name: Assert parallel bisection finds the eight interacting culprits
+        run: |
+          node -e '
+            const r = require("./depbisect-jobs-report.json");
+            const expected = [
+              "consensus-auth", "consensus-codec", "consensus-gossip", "consensus-ledger",
+              "consensus-router", "consensus-session", "consensus-stream", "consensus-sync"
+            ];
+            const actual = r.minimalSet.map((change) => change.name);
+            const valid =
+              r.outcome === "minimal-set-found" &&
+              r.changes.length === 18 &&
+              r.minimalityProven === true &&
+              r.confidence.failures === 3 &&
+              r.confidence.runs === 3 &&
+              JSON.stringify(actual) === JSON.stringify(expected);
+            if (!valid) {
+              console.error("unexpected result:", JSON.stringify({
+                outcome: r.outcome,
+                changes: r.changes.length,
+                minimalityProven: r.minimalityProven,
+                minimalSet: actual,
+                confidence: r.confidence
+              }, null, 2));
+              process.exit(1);
+            }
+            console.log("jobs demo verified (--jobs 4):", actual.length, "interacting culprits, reproduced 3/3");
+          '
       - uses: actions/upload-artifact@v7
         if: always()
         with:
