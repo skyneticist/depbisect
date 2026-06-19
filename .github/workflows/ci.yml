@@ -73,6 +73,23 @@ jobs:
       - name: go test
         run: go test ./...
 
+  coverage:
+    name: Coverage floor
+    # Single OS on purpose: internal/gitx, execx and verify branch on the OS,
+    # so per-OS coverage differs by a few tenths. The floor sits a few points
+    # below the current level to catch regressions, not freeze the number.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: Test with coverage
+        run: go test -coverprofile=coverage.out ./...
+      - name: Enforce coverage floor
+        run: ./scripts/check-coverage.sh coverage.out 80.0
+
   race:
     name: Race detector / ${{ matrix.os }}
     strategy:

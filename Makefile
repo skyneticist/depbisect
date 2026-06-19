@@ -9,6 +9,7 @@ BIN_DIR  ?= bin
 BINARY   ?= $(BIN_DIR)/depbisect
 PKG      ?= ./...
 FUZZTIME ?= 30s
+COVER_MIN ?= 80.0
 
 .DEFAULT_GOAL := help
 
@@ -28,6 +29,11 @@ test: ## Run the test suite (executes fuzz seed corpora too).
 .PHONY: test-race
 test-race: ## Run the test suite with the race detector.
 	$(GO) test -race $(PKG)
+
+.PHONY: cover
+cover: ## Run tests with coverage and enforce the floor (override: make cover COVER_MIN=85).
+	$(GO) test -coverprofile=coverage.out $(PKG)
+	./scripts/check-coverage.sh coverage.out $(COVER_MIN)
 
 .PHONY: fmt
 fmt: ## Format all Go source in place.
