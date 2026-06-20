@@ -118,6 +118,10 @@ depbisect run --base origin/main --runs 3 -- cargo test
 depbisect run --base origin/main --runs 3 -- go test ./...
 ```
 
+The Go demos run fully offline via a generated `file://` module proxy; here DepBisect narrows twelve Go module bumps to the five-module set that breaks the build:
+
+![DepBisect narrowing twelve Go module bumps to the five-module culprit set that breaks the build](docs/go-complex.gif)
+
 **Preview before you commit to a run.** `--dry-run` resolves `--base..HEAD`, diffs the
 declared dependencies, and prints the plan — installing nothing and never running your
 command:
