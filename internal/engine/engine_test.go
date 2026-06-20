@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/skyneticist/depbisect/internal/execx"
+	"github.com/skyneticist/depbisect/internal/manifest"
 	"github.com/skyneticist/depbisect/internal/pm"
 	"github.com/skyneticist/depbisect/internal/verify"
 )
@@ -126,9 +127,23 @@ func (g *fakeGit) IsPathDirty(ctx context.Context, path string) (bool, error) {
 
 var errNotExistForTest = errors.New("file does not exist at revision")
 
-// readDeps parses the dependencies section of the package.json in dir.
+// readDeps parses the flattened dependency specs of the candidate manifest in
+// dir, handling both package.json and Cargo.toml repos.
 func readDeps(t testing.TB, dir string) map[string]string {
 	t.Helper()
+	if data, err := os.ReadFile(filepath.Join(dir, "Cargo.toml")); err == nil {
+		c, err := manifest.ParseCargoToml(data)
+		if err != nil {
+			t.Fatalf("parse candidate Cargo.toml: %v", err)
+		}
+		deps := map[string]string{}
+		for _, sec := range c.Sections {
+			for k, v := range sec {
+				deps[k] = v
+			}
+		}
+		return deps
+	}
 	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
 	if err != nil {
 		t.Fatalf("read candidate manifest: %v", err)
@@ -414,6 +429,65 @@ func TestRunFindsSingleCulprit(t *testing.T) {
 	}
 	if roles["baseline-old"] != 1 || roles["baseline-new"] != 1 || roles["candidate"] == 0 {
 		t.Errorf("trial roles = %v", roles)
+	}
+}
+
+const cargoLockOld = `version = 3
+[[package]]
+name = "alpha"
+version = "1.0.0"
+[[package]]
+name = "beta"
+version = "3.0.0"
+[[package]]
+name = "gamma"
+version = "5.0.0"
+`
+const cargoLockNew = `version = 3
+[[package]]
+name = "alpha"
+version = "1.1.0"
+[[package]]
+name = "beta"
+version = "3.2.0"
+[[package]]
+name = "gamma"
+version = "5.5.0"
+`
+
+func threeChangeCargoRepo() *fakeGit {
+	const baseToml = "[package]\nname = \"app\"\n\n[dependencies]\nalpha = \"1.0.0\"\nbeta = \"3.0.0\"\ngamma = \"5.0.0\"\n"
+	const headToml = "[package]\nname = \"app\"\n\n[dependencies]\nalpha = \"1.1.0\"\nbeta = \"3.2.0\"\ngamma = \"5.5.0\"\n"
+	return &fakeGit{
+		revs: map[string]string{"base": "sha-base", "HEAD": "sha-head"},
+		files: map[string]map[string]string{
+			"sha-base": {"Cargo.toml": baseToml, "Cargo.lock": cargoLockOld},
+			"sha-head": {"Cargo.toml": headToml, "Cargo.lock": cargoLockNew},
+		},
+	}
+}
+
+// TestRunFindsSingleCulpritCargo exercises the whole engine over a Rust repo:
+// auto-detection, Cargo.toml diff/render, and Cargo.lock annotation.
+func TestRunFindsSingleCulpritCargo(t *testing.T) {
+	env := newEnv(t, threeChangeCargoRepo(), func(deps map[string]string) bool {
+		return deps["beta"] == "3.2.0"
+	}, 3)
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeMinimalFound {
+		t.Fatalf("outcome = %q, diagnostics %v", res.Outcome, res.Diagnostics)
+	}
+	if res.PackageManager != "cargo" {
+		t.Errorf("pm = %q, want cargo", res.PackageManager)
+	}
+	if got := minimalNames(res); ids(got) != "beta" {
+		t.Errorf("minimal = %v, want [beta]", got)
+	}
+	if res.Minimal[0].OldResolved != "3.0.0" || res.Minimal[0].NewResolved != "3.2.0" {
+		t.Errorf("resolved versions not annotated from Cargo.lock: %+v", res.Minimal[0])
 	}
 }
 
