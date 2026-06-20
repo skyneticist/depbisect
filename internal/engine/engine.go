@@ -293,6 +293,16 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 			return fail(fmt.Errorf("pnpm-workspace.yaml found; pnpm workspaces are not supported yet"))
 		}
 	}
+	// Go likewise declares workspaces in a separate go.work file, not in go.mod.
+	if manager == pm.GO {
+		hasGoWork, err := e.Git.FileExists(ctx, toSHA, "go.work")
+		if err != nil {
+			return fail(err)
+		}
+		if hasGoWork {
+			return fail(fmt.Errorf("go.work found; Go workspaces are not supported yet"))
+		}
+	}
 
 	// Phase 3: read manifests.
 	manifestName := manager.ManifestName()
@@ -677,7 +687,8 @@ func (e *Engine) readManifest(ctx context.Context, eco manifest.Ecosystem, name,
 
 // detectManager chooses the package manager. A non-empty override wins;
 // otherwise the manifest present at the target revision selects the ecosystem
-// (Cargo.toml -> cargo, package.json -> npm/pnpm by lockfile).
+// (Cargo.toml -> cargo, go.mod -> go, package.json -> npm/pnpm by lockfile).
+// More than one manifest is ambiguous and requires --pm.
 func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.Manager, error) {
 	if override != "" {
 		return pm.Detect(false, false, override)
@@ -690,11 +701,28 @@ func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.
 	if err != nil {
 		return "", err
 	}
+	hasGoMod, err := e.Git.FileExists(ctx, toSHA, pm.GO.ManifestName())
+	if err != nil {
+		return "", err
+	}
+	var found []string
+	if hasPackageJSON {
+		found = append(found, "package.json")
+	}
+	if hasCargoToml {
+		found = append(found, "Cargo.toml")
+	}
+	if hasGoMod {
+		found = append(found, "go.mod")
+	}
+	if len(found) > 1 {
+		return "", fmt.Errorf("multiple manifests found (%s); choose one with --pm", strings.Join(found, ", "))
+	}
 	switch {
-	case hasPackageJSON && hasCargoToml:
-		return "", fmt.Errorf("both package.json and Cargo.toml found; choose one with --pm")
 	case hasCargoToml:
 		return pm.CARGO, nil
+	case hasGoMod:
+		return pm.GO, nil
 	case hasPackageJSON:
 		hasNpmLock, err := e.Git.FileExists(ctx, toSHA, pm.NPM.LockfileName())
 		if err != nil {
@@ -706,7 +734,7 @@ func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.
 		}
 		return pm.Detect(hasNpmLock, hasPnpmLock, "")
 	default:
-		return "", fmt.Errorf("no supported manifest found at %s (package.json or Cargo.toml)", shortSHA(toSHA))
+		return "", fmt.Errorf("no supported manifest found at %s (package.json, Cargo.toml, or go.mod)", shortSHA(toSHA))
 	}
 }
 
@@ -736,9 +764,10 @@ func (e *Engine) readLockfile(ctx context.Context, eco manifest.Ecosystem, name,
 // path that does not exist is harmless: git status reports it as clean.
 func (e *Engine) warnDirty(ctx context.Context, manager pm.Manager, res *Result) {
 	var paths []string
-	if manager == pm.CARGO {
+	switch manager {
+	case pm.CARGO, pm.GO:
 		paths = []string{manager.ManifestName(), manager.LockfileName()}
-	} else {
+	default:
 		paths = []string{pm.NPM.ManifestName(), pm.NPM.LockfileName(), pm.PNPM.LockfileName()}
 	}
 	for _, path := range paths {

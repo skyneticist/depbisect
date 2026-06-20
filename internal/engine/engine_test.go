@@ -128,8 +128,8 @@ func (g *fakeGit) IsPathDirty(ctx context.Context, path string) (bool, error) {
 var errNotExistForTest = errors.New("file does not exist at revision")
 
 // readDeps parses the flattened dependency specs of the candidate manifest in
-// dir. It prefers package.json (the JavaScript fixtures); a cargo-only repo has
-// no package.json and falls through to Cargo.toml.
+// dir. It prefers package.json (the JavaScript fixtures); a repo without one
+// falls through to Cargo.toml, then go.mod.
 func readDeps(t testing.TB, dir string) map[string]string {
 	t.Helper()
 	if data, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil {
@@ -149,16 +149,29 @@ func readDeps(t testing.TB, dir string) map[string]string {
 		}
 		return deps
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "Cargo.toml"))
+	if data, err := os.ReadFile(filepath.Join(dir, "Cargo.toml")); err == nil {
+		c, err := manifest.ParseCargoToml(data)
+		if err != nil {
+			t.Fatalf("parse candidate Cargo.toml: %v", err)
+		}
+		deps := map[string]string{}
+		for _, sec := range c.Sections {
+			for k, v := range sec {
+				deps[k] = v
+			}
+		}
+		return deps
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
 	if err != nil {
 		t.Fatalf("read candidate manifest: %v", err)
 	}
-	c, err := manifest.ParseCargoToml(data)
+	g, err := manifest.ParseGoMod(data)
 	if err != nil {
-		t.Fatalf("parse candidate Cargo.toml: %v", err)
+		t.Fatalf("parse candidate go.mod: %v", err)
 	}
 	deps := map[string]string{}
-	for _, sec := range c.Sections {
+	for _, sec := range g.Sections {
 		for k, v := range sec {
 			deps[k] = v
 		}
@@ -489,6 +502,57 @@ func TestRunFindsSingleCulpritCargo(t *testing.T) {
 	}
 	if res.Minimal[0].OldResolved != "3.0.0" || res.Minimal[0].NewResolved != "3.2.0" {
 		t.Errorf("resolved versions not annotated from Cargo.lock: %+v", res.Minimal[0])
+	}
+}
+
+const goSumOld = `example.com/alpha v1.0.0 h1:aaa
+example.com/alpha v1.0.0/go.mod h1:aaamod
+example.com/beta v1.3.0 h1:bbb
+example.com/beta v1.3.0/go.mod h1:bbbmod
+example.com/gamma v1.5.0 h1:ccc
+example.com/gamma v1.5.0/go.mod h1:cccmod
+`
+const goSumNew = `example.com/alpha v1.1.0 h1:aaa
+example.com/alpha v1.1.0/go.mod h1:aaamod
+example.com/beta v1.4.0 h1:bbb
+example.com/beta v1.4.0/go.mod h1:bbbmod
+example.com/gamma v1.6.0 h1:ccc
+example.com/gamma v1.6.0/go.mod h1:cccmod
+`
+
+func threeChangeGoRepo() *fakeGit {
+	const baseMod = "module example.com/app\n\ngo 1.20\n\nrequire (\n\texample.com/alpha v1.0.0\n\texample.com/beta v1.3.0\n\texample.com/gamma v1.5.0\n)\n"
+	const headMod = "module example.com/app\n\ngo 1.20\n\nrequire (\n\texample.com/alpha v1.1.0\n\texample.com/beta v1.4.0\n\texample.com/gamma v1.6.0\n)\n"
+	return &fakeGit{
+		revs: map[string]string{"base": "sha-base", "HEAD": "sha-head"},
+		files: map[string]map[string]string{
+			"sha-base": {"go.mod": baseMod, "go.sum": goSumOld},
+			"sha-head": {"go.mod": headMod, "go.sum": goSumNew},
+		},
+	}
+}
+
+// TestRunFindsSingleCulpritGo exercises the whole engine over a Go repo:
+// go.mod auto-detection, modfile diff/render, and go.sum annotation.
+func TestRunFindsSingleCulpritGo(t *testing.T) {
+	env := newEnv(t, threeChangeGoRepo(), func(deps map[string]string) bool {
+		return deps["example.com/beta"] == "v1.4.0"
+	}, 3)
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeMinimalFound {
+		t.Fatalf("outcome = %q, diagnostics %v", res.Outcome, res.Diagnostics)
+	}
+	if res.PackageManager != "go" {
+		t.Errorf("pm = %q, want go", res.PackageManager)
+	}
+	if got := minimalNames(res); ids(got) != "example.com/beta" {
+		t.Errorf("minimal = %v, want [example.com/beta]", got)
+	}
+	if res.Minimal[0].OldResolved != "v1.3.0" || res.Minimal[0].NewResolved != "v1.4.0" {
+		t.Errorf("resolved versions not annotated from go.sum: %+v", res.Minimal[0])
 	}
 }
 
@@ -1286,7 +1350,7 @@ func TestRunDetectsAmbiguousEcosystems(t *testing.T) {
 	git.files["sha-head"]["Cargo.toml"] = "[package]\nname = \"x\"\nversion = \"0.1.0\"\n"
 	env := newEnv(t, git, nil, 1)
 	_, err := env.eng.Run(context.Background(), baseOpts())
-	if err == nil || !strings.Contains(err.Error(), "both package.json and Cargo.toml") {
+	if err == nil || !strings.Contains(err.Error(), "multiple manifests found") {
 		t.Fatalf("err = %v, want ambiguous-ecosystem error", err)
 	}
 	if len(env.tempDirs) != 0 {
