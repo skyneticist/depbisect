@@ -235,7 +235,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -271,6 +271,34 @@ jobs:
         run: |
           jq -e '.outcome == "minimal-set-found" and (.changes | length) == 12' depbisect-cargo-complex-report.json
           jq -e '[.minimalSet[].name] == ["cache_reader","cache_writer","wire_decoder","wire_encoder","wire_transport"]' depbisect-cargo-complex-report.json
+      - name: Generate jobs Cargo example repo
+        run: ./examples/make-demo-cargo-jobs.sh
+      - name: Bisect the jobs Cargo example repo in parallel
+        run: |
+          ./depbisect run \
+            --repo examples/demo-cargo-jobs/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --jobs 4 \
+            --report-json depbisect-cargo-jobs-report.json \
+            -- cargo test
+      - name: Assert the eight consensus crates were identified
+        run: |
+          jq -e '.outcome == "minimal-set-found" and (.changes | length) == 18 and (.minimalSet | length) == 8 and ([.minimalSet[].name] | map(startswith("consensus_")) | all)' depbisect-cargo-jobs-report.json
+      - name: Generate swarm Cargo example repo
+        run: ./examples/make-demo-cargo-swarm.sh
+      - name: Bisect the swarm Cargo example repo in parallel
+        run: |
+          ./depbisect run \
+            --repo examples/demo-cargo-swarm/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --jobs 12 \
+            --report-json depbisect-cargo-swarm-report.json \
+            -- cargo test
+      - name: Assert the twelve replica crates were identified
+        run: |
+          jq -e '.outcome == "minimal-set-found" and (.changes | length) == 28 and (.minimalSet | length) == 12 and ([.minimalSet[].name] | map(startswith("replica_")) | all)' depbisect-cargo-swarm-report.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -280,14 +308,14 @@ jobs:
 
   demo-go:
     name: Go CLI smoke test against example repo
-    # The example repo is fully offline (generated file:// module proxy with
+    # The example repos are fully offline (generated file:// module proxy with
     # GOSUMDB=off), so no modules are downloaded from the network.
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -313,11 +341,69 @@ jobs:
       - name: Assert the culprit was identified
         run: |
           jq -e '.outcome == "minimal-set-found" and .packageManager == "go" and (.minimalSet | length) == 1 and .minimalSet[0].name == "example.com/breakage"' depbisect-go-report.json
+      - name: Generate complex Go example repo
+        run: ./examples/make-demo-go-complex.sh
+      - name: Bisect the complex Go example repo in parallel
+        env:
+          GOPROXY: file://${{ github.workspace }}/examples/demo-go-complex/proxy
+          GOSUMDB: "off"
+          GOFLAGS: -mod=mod
+          GOTOOLCHAIN: local
+        run: |
+          ./depbisect run \
+            --repo examples/demo-go-complex/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --jobs 4 \
+            --report-json depbisect-go-complex-report.json \
+            -- go test ./...
+      - name: Assert the five interacting culprits were identified
+        run: |
+          jq -e '.outcome == "minimal-set-found" and (.changes | length) == 12' depbisect-go-complex-report.json
+          jq -e '[.minimalSet[].name] == ["example.com/cache-reader","example.com/cache-writer","example.com/wire-decoder","example.com/wire-encoder","example.com/wire-transport"]' depbisect-go-complex-report.json
+      - name: Generate jobs Go example repo
+        run: ./examples/make-demo-go-jobs.sh
+      - name: Bisect the jobs Go example repo in parallel
+        env:
+          GOPROXY: file://${{ github.workspace }}/examples/demo-go-jobs/proxy
+          GOSUMDB: "off"
+          GOFLAGS: -mod=mod
+          GOTOOLCHAIN: local
+        run: |
+          ./depbisect run \
+            --repo examples/demo-go-jobs/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --jobs 4 \
+            --report-json depbisect-go-jobs-report.json \
+            -- go test ./...
+      - name: Assert the eight consensus modules were identified
+        run: |
+          jq -e '.outcome == "minimal-set-found" and (.changes | length) == 18 and (.minimalSet | length) == 8 and ([.minimalSet[].name] | map(startswith("example.com/consensus-")) | all)' depbisect-go-jobs-report.json
+      - name: Generate swarm Go example repo
+        run: ./examples/make-demo-go-swarm.sh
+      - name: Bisect the swarm Go example repo in parallel
+        env:
+          GOPROXY: file://${{ github.workspace }}/examples/demo-go-swarm/proxy
+          GOSUMDB: "off"
+          GOFLAGS: -mod=mod
+          GOTOOLCHAIN: local
+        run: |
+          ./depbisect run \
+            --repo examples/demo-go-swarm/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --jobs 12 \
+            --report-json depbisect-go-swarm-report.json \
+            -- go test ./...
+      - name: Assert the twelve replica modules were identified
+        run: |
+          jq -e '.outcome == "minimal-set-found" and (.changes | length) == 28 and (.minimalSet | length) == 12 and ([.minimalSet[].name] | map(startswith("example.com/replica-")) | all)' depbisect-go-swarm-report.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: go-demo-reports-${{ matrix.os }}
-          path: depbisect-go-report.json
+          path: depbisect-go*-report.json
           if-no-files-found: ignore
 
   action-smoke:

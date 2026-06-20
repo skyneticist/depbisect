@@ -189,7 +189,25 @@ Breaking dependencies
   - wire_transport 1.0.0 -> 2.0.0
 ```
 
-Re-run either script to reset its generated repository.
+The jobs and swarm demos scale that interacting-failure pattern up to show off
+`--jobs`: eighteen crates with eight `consensus_*` culprits, then twenty-eight
+crates with twelve `replica_*` culprits. Each fails only when every culprit
+upgrades together, so the minimal set is identical at any job count — a higher
+count just finishes sooner.
+
+```sh
+./examples/make-demo-cargo-jobs.sh
+./depbisect run --repo examples/demo-cargo-jobs/app --base HEAD~1 --runs 3 --jobs 4 -- cargo test
+
+./examples/make-demo-cargo-swarm.sh
+./depbisect run --repo examples/demo-cargo-swarm/app --base HEAD~1 --runs 3 --jobs 12 -- cargo test
+```
+
+![DepBisect isolating the eight consensus_* crates of the Cargo --jobs demo](../docs/cargo-jobs.gif)
+
+![DepBisect isolating the twelve replica_* crates of the Cargo swarm demo](../docs/cargo-swarm.gif)
+
+Re-run any script to reset its generated repository.
 
 ## Go modules demo
 
@@ -211,4 +229,22 @@ GOPROXY="file://$PWD/examples/demo-go/proxy" GOSUMDB=off GOFLAGS=-mod=mod GOTOOL
 
 Expected result: minimal failing set = `example.com/breakage v1.0.0 -> v1.1.0`.
 
-Re-run `make-demo-go.sh` to reset the generated repository.
+The complex, jobs, and swarm demos mirror their npm and Cargo counterparts —
+twelve modules with a five-module wire/cache culprit set, eighteen with eight
+`consensus-*`, and twenty-eight with twelve `replica-*` — all served from the
+same offline file proxy. Each prints its exact `GOPROXY=… ./depbisect run …`
+command when it finishes:
+
+```sh
+./examples/make-demo-go-complex.sh   # 12 modules -> 5-module minimal set
+./examples/make-demo-go-jobs.sh      # 18 modules -> 8 consensus-* (try --jobs 4)
+./examples/make-demo-go-swarm.sh     # 28 modules -> 12 replica-* (try --jobs 12)
+```
+
+![DepBisect narrowing twelve Go module bumps to the five-module culprit set](../docs/go-complex.gif)
+
+![DepBisect isolating the eight consensus-* modules of the Go --jobs demo](../docs/go-jobs.gif)
+
+![DepBisect isolating the twelve replica-* modules of the Go swarm demo](../docs/go-swarm.gif)
+
+Re-run any script to reset its generated repository.
