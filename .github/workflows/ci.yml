@@ -83,7 +83,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version: stable
@@ -276,6 +276,48 @@ jobs:
         with:
           name: cargo-demo-reports-${{ matrix.os }}
           path: depbisect-cargo*-report.json
+          if-no-files-found: ignore
+
+  demo-go:
+    name: Go CLI smoke test against example repo
+    # The example repo is fully offline (generated file:// module proxy with
+    # GOSUMDB=off), so no modules are downloaded from the network.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: Generate Go example repo
+        run: ./examples/make-demo-go.sh
+      - name: Build CLI
+        run: go build ./cmd/depbisect
+      - name: Bisect the Go example repo
+        env:
+          GOPROXY: file://${{ github.workspace }}/examples/demo-go/proxy
+          GOSUMDB: "off"
+          GOFLAGS: -mod=mod
+          GOTOOLCHAIN: local
+        run: |
+          ./depbisect run \
+            --repo examples/demo-go/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --report-json depbisect-go-report.json \
+            -- go test ./...
+      - name: Assert the culprit was identified
+        run: |
+          jq -e '.outcome == "minimal-set-found" and .packageManager == "go" and (.minimalSet | length) == 1 and .minimalSet[0].name == "example.com/breakage"' depbisect-go-report.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: go-demo-reports-${{ matrix.os }}
+          path: depbisect-go-report.json
           if-no-files-found: ignore
 
   action-smoke:
