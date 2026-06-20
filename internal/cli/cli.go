@@ -38,9 +38,10 @@ Usage:
   depbisect completion bash|zsh
   depbisect help
 
-Finds the smallest set of direct dependency updates (package.json) between
---base and --to that makes <command> fail, using delta debugging in an
-isolated git worktree. Your checkout is never modified.
+Finds the smallest set of direct dependency updates (package.json,
+Cargo.toml, or go.mod) between --base and --to that makes <command> fail,
+using delta debugging in an isolated git worktree. Your checkout is never
+modified.
 
 The verification command after -- is executed directly with its arguments
 preserved exactly; no shell is involved. Wrap it yourself if you need shell
@@ -61,7 +62,8 @@ Flags for run:
                         timeout per dependency install (default none)
   --overall-timeout <dur>
                         timeout for the complete bisection (default none)
-  --pm <npm|pnpm>       package manager (default: detected from lockfile)
+  --pm <npm|pnpm|cargo|go>
+                        package manager (default: auto-detected)
   --report-md <path>    Markdown report path (default "depbisect-report.md")
   --report-json <path>  JSON report path (default "depbisect-report.json")
   --no-reports          write no report files

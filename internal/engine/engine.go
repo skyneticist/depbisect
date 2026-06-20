@@ -195,8 +195,6 @@ type Engine struct {
 	MkdirTemp func() (string, error)
 }
 
-const manifestName = "package.json"
-
 // Run executes the bisection described by opts. The returned Result is
 // non-nil even on error, carrying whatever was established before failure.
 func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
@@ -275,48 +273,59 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	progress.Step("Compare", "%s (%s) -> %s (%s)",
 		opts.BaseRev, shortSHA(baseSHA), opts.ToRev, shortSHA(toSHA))
 
-	basePkg, err := e.readManifest(ctx, baseSHA, opts.BaseRev)
-	if err != nil {
-		return fail(err)
-	}
-	toPkg, err := e.readManifest(ctx, toSHA, opts.ToRev)
-	if err != nil {
-		return fail(err)
-	}
-	if basePkg.HasWorkspaces || toPkg.HasWorkspaces {
-		return fail(fmt.Errorf("package.json declares workspaces; multi-package workspaces are not supported yet"))
-	}
-
-	// Phase 2: detect the package manager and read lockfiles.
-	hasPnpmWorkspace, err := e.Git.FileExists(ctx, toSHA, "pnpm-workspace.yaml")
-	if err != nil {
-		return fail(err)
-	}
-	if hasPnpmWorkspace {
-		return fail(fmt.Errorf("pnpm-workspace.yaml found; pnpm workspaces are not supported yet"))
-	}
-	hasNpmLock, err := e.Git.FileExists(ctx, toSHA, pm.NPM.LockfileName())
-	if err != nil {
-		return fail(err)
-	}
-	hasPnpmLock, err := e.Git.FileExists(ctx, toSHA, pm.PNPM.LockfileName())
-	if err != nil {
-		return fail(err)
-	}
-	manager, err := pm.Detect(hasNpmLock, hasPnpmLock, opts.PMOverride)
+	// Phase 2: detect the package manager / ecosystem and select handlers.
+	manager, err := e.detectManager(ctx, toSHA, opts.PMOverride)
 	if err != nil {
 		return fail(err)
 	}
 	res.PackageManager = string(manager)
+	eco, err := manifest.EcosystemFor(string(manager))
+	if err != nil {
+		return fail(err)
+	}
+	// pnpm declares workspaces in a separate file rather than in the manifest.
+	if manager == pm.NPM || manager == pm.PNPM {
+		hasPnpmWorkspace, err := e.Git.FileExists(ctx, toSHA, "pnpm-workspace.yaml")
+		if err != nil {
+			return fail(err)
+		}
+		if hasPnpmWorkspace {
+			return fail(fmt.Errorf("pnpm-workspace.yaml found; pnpm workspaces are not supported yet"))
+		}
+	}
+	// Go likewise declares workspaces in a separate go.work file, not in go.mod.
+	if manager == pm.GO {
+		hasGoWork, err := e.Git.FileExists(ctx, toSHA, "go.work")
+		if err != nil {
+			return fail(err)
+		}
+		if hasGoWork {
+			return fail(fmt.Errorf("go.work found; Go workspaces are not supported yet"))
+		}
+	}
 
-	oldResolved := e.readLockfile(ctx, manager, baseSHA, opts.BaseRev, res)
-	newResolved := e.readLockfile(ctx, manager, toSHA, opts.ToRev, res)
+	// Phase 3: read manifests.
+	manifestName := manager.ManifestName()
+	basePkg, err := e.readManifest(ctx, eco, manifestName, baseSHA, opts.BaseRev)
+	if err != nil {
+		return fail(err)
+	}
+	toPkg, err := e.readManifest(ctx, eco, manifestName, toSHA, opts.ToRev)
+	if err != nil {
+		return fail(err)
+	}
+	if basePkg.HasWorkspaceLayout() || toPkg.HasWorkspaceLayout() {
+		return fail(fmt.Errorf("%s declares workspaces; multi-package workspaces are not supported yet", manifestName))
+	}
 
-	// Phase 3: diff.
-	changes := manifest.Diff(basePkg, toPkg)
+	oldResolved := e.readLockfile(ctx, eco, manager.LockfileName(), baseSHA, opts.BaseRev, res)
+	newResolved := e.readLockfile(ctx, eco, manager.LockfileName(), toSHA, opts.ToRev, res)
+
+	// Phase 4: diff.
+	changes := eco.Diff(basePkg, toPkg)
 	manifest.AnnotateResolved(changes, oldResolved, newResolved)
 	res.Changes = changes
-	res.LockfileOnly = manifest.LockfileOnly(basePkg, toPkg, oldResolved, newResolved)
+	res.LockfileOnly = eco.LockfileOnly(basePkg, toPkg, oldResolved, newResolved)
 	if n := len(res.LockfileOnly); n > 0 {
 		res.Diagnostics = append(res.Diagnostics, fmt.Sprintf(
 			"%s changed only in the lockfile (version spec unchanged): %s. "+
@@ -327,7 +336,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	progress.Step("Changes", "%s",
 		pluralize(len(changes), "direct dependency change", "direct dependency changes"))
 
-	e.warnDirty(ctx, res)
+	e.warnDirty(ctx, manager, res)
 
 	if len(changes) == 0 {
 		res.Outcome = OutcomeNoChanges
@@ -441,7 +450,9 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		progress:       progress,
 		now:            now,
 		toSHA:          toSHA,
-		toPkg:          toPkg,
+		toManifest:     toPkg,
+		eco:            eco,
+		manifestName:   manifestName,
 		changes:        changes,
 		totalChanges:   len(changes),
 		stream:         opts.Stream,
@@ -661,35 +672,82 @@ func removeChange(changes []manifest.Change, index int) []manifest.Change {
 	return out
 }
 
-// readManifest loads and parses package.json at a revision.
-func (e *Engine) readManifest(ctx context.Context, sha, revLabel string) (*manifest.PackageJSON, error) {
-	data, err := e.Git.ShowFile(ctx, sha, manifestName)
+// readManifest loads and parses the ecosystem's manifest at a revision.
+func (e *Engine) readManifest(ctx context.Context, eco manifest.Ecosystem, name, sha, revLabel string) (manifest.Parsed, error) {
+	data, err := e.Git.ShowFile(ctx, sha, name)
 	if err != nil {
-		return nil, fmt.Errorf("read %s at %s: %w", manifestName, revLabel, err)
+		return nil, fmt.Errorf("read %s at %s: %w", name, revLabel, err)
 	}
-	pkg, err := manifest.ParsePackageJSON(data)
+	pkg, err := eco.Parse(data)
 	if err != nil {
 		return nil, fmt.Errorf("at %s: %w", revLabel, err)
 	}
 	return pkg, nil
 }
 
+// detectManager chooses the package manager. A non-empty override wins;
+// otherwise the manifest present at the target revision selects the ecosystem
+// (Cargo.toml -> cargo, go.mod -> go, package.json -> npm/pnpm by lockfile).
+// More than one manifest is ambiguous and requires --pm.
+func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.Manager, error) {
+	if override != "" {
+		return pm.Detect(false, false, override)
+	}
+	hasPackageJSON, err := e.Git.FileExists(ctx, toSHA, pm.NPM.ManifestName())
+	if err != nil {
+		return "", err
+	}
+	hasCargoToml, err := e.Git.FileExists(ctx, toSHA, pm.CARGO.ManifestName())
+	if err != nil {
+		return "", err
+	}
+	hasGoMod, err := e.Git.FileExists(ctx, toSHA, pm.GO.ManifestName())
+	if err != nil {
+		return "", err
+	}
+	var found []string
+	if hasPackageJSON {
+		found = append(found, "package.json")
+	}
+	if hasCargoToml {
+		found = append(found, "Cargo.toml")
+	}
+	if hasGoMod {
+		found = append(found, "go.mod")
+	}
+	if len(found) > 1 {
+		return "", fmt.Errorf("multiple manifests found (%s); choose one with --pm", strings.Join(found, ", "))
+	}
+	switch {
+	case hasCargoToml:
+		return pm.CARGO, nil
+	case hasGoMod:
+		return pm.GO, nil
+	case hasPackageJSON:
+		hasNpmLock, err := e.Git.FileExists(ctx, toSHA, pm.NPM.LockfileName())
+		if err != nil {
+			return "", err
+		}
+		hasPnpmLock, err := e.Git.FileExists(ctx, toSHA, pm.PNPM.LockfileName())
+		if err != nil {
+			return "", err
+		}
+		return pm.Detect(hasNpmLock, hasPnpmLock, "")
+	default:
+		return "", fmt.Errorf("no supported manifest found at %s (package.json, Cargo.toml, or go.mod)", shortSHA(toSHA))
+	}
+}
+
 // readLockfile loads resolved versions at a revision; failures degrade to a
 // diagnostic because resolution info is helpful but not essential.
-func (e *Engine) readLockfile(ctx context.Context, manager pm.Manager, sha, revLabel string, res *Result) manifest.Resolved {
-	name := manager.LockfileName()
+func (e *Engine) readLockfile(ctx context.Context, eco manifest.Ecosystem, name, sha, revLabel string, res *Result) manifest.Resolved {
 	data, err := e.Git.ShowFile(ctx, sha, name)
 	if err != nil {
 		res.Diagnostics = append(res.Diagnostics, fmt.Sprintf(
 			"could not read %s at %s; resolved versions for that side are unknown", name, revLabel))
 		return manifest.Resolved{}
 	}
-	var resolved manifest.Resolved
-	if manager == pm.PNPM {
-		resolved, err = manifest.ParsePnpmLock(data)
-	} else {
-		resolved, err = manifest.ParsePackageLock(data)
-	}
+	resolved, err := eco.ParseLock(data)
 	if err != nil {
 		res.Diagnostics = append(res.Diagnostics, fmt.Sprintf(
 			"could not parse lockfile %s at %s (%v); resolved versions for that side are unknown",
@@ -699,13 +757,20 @@ func (e *Engine) readLockfile(ctx context.Context, manager pm.Manager, sha, revL
 	return resolved
 }
 
-// warnDirty surfaces uncommitted manifest/lockfile edits in the user's
-// working tree, which DepBisect deliberately ignores. Both lockfiles are
+// warnDirty surfaces uncommitted manifest/lockfile edits in the user's working
+// tree, which DepBisect deliberately ignores. For JavaScript both lockfiles are
 // checked regardless of the detected/overridden manager, so forcing --pm on a
 // repo whose actual lockfile differs still surfaces a dirty lockfile. Probing a
 // path that does not exist is harmless: git status reports it as clean.
-func (e *Engine) warnDirty(ctx context.Context, res *Result) {
-	for _, path := range []string{manifestName, pm.NPM.LockfileName(), pm.PNPM.LockfileName()} {
+func (e *Engine) warnDirty(ctx context.Context, manager pm.Manager, res *Result) {
+	var paths []string
+	switch manager {
+	case pm.CARGO, pm.GO:
+		paths = []string{manager.ManifestName(), manager.LockfileName()}
+	default:
+		paths = []string{pm.NPM.ManifestName(), pm.NPM.LockfileName(), pm.PNPM.LockfileName()}
+	}
+	for _, path := range paths {
 		dirty, err := e.Git.IsPathDirty(ctx, path)
 		if err == nil && dirty {
 			res.Diagnostics = append(res.Diagnostics, fmt.Sprintf(

@@ -55,6 +55,8 @@ jobs:
           go test -run='^$' -fuzz='^FuzzParsePackageJSON$' -fuzztime=30s ./internal/manifest
           go test -run='^$' -fuzz='^FuzzParsePackageLock$' -fuzztime=30s ./internal/manifest
           go test -run='^$' -fuzz='^FuzzParsePnpmLock$' -fuzztime=30s ./internal/manifest
+          go test -run='^$' -fuzz='^FuzzParseCargoToml$' -fuzztime=30s ./internal/manifest
+          go test -run='^$' -fuzz='^FuzzParseCargoLock$' -fuzztime=30s ./internal/manifest
 
   test:
     name: ${{ matrix.os }} / Go ${{ matrix.go }}
@@ -221,6 +223,101 @@ jobs:
         with:
           name: demo-reports-${{ matrix.os }}
           path: depbisect-*-report.*
+          if-no-files-found: ignore
+
+  demo-cargo:
+    name: Cargo CLI smoke test against example repo
+    # cargo is preinstalled on GitHub's ubuntu and macos runners, matching the
+    # npm demo job's reliance on a preinstalled node. The example repos are
+    # fully offline (committed vendored registry), so no crates are downloaded.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: Generate simple Cargo example repo
+        run: ./examples/make-demo-cargo.sh
+      - name: Build CLI
+        run: go build ./cmd/depbisect
+      - name: Bisect the simple Cargo example repo
+        run: |
+          ./depbisect run \
+            --repo examples/demo-cargo/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --report-json depbisect-cargo-report.json \
+            -- cargo test
+      - name: Assert the simple culprit was identified
+        run: |
+          jq -e '.outcome == "minimal-set-found" and .packageManager == "cargo" and (.minimalSet | length) == 1 and .minimalSet[0].name == "breakage"' depbisect-cargo-report.json
+      - name: Generate complex Cargo example repo
+        run: ./examples/make-demo-cargo-complex.sh
+      - name: Bisect the complex Cargo example repo in parallel
+        run: |
+          ./depbisect run \
+            --repo examples/demo-cargo-complex/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --jobs 4 \
+            --report-json depbisect-cargo-complex-report.json \
+            -- cargo test
+      - name: Assert the five interacting culprits were identified
+        run: |
+          jq -e '.outcome == "minimal-set-found" and (.changes | length) == 12' depbisect-cargo-complex-report.json
+          jq -e '[.minimalSet[].name] == ["cache_reader","cache_writer","wire_decoder","wire_encoder","wire_transport"]' depbisect-cargo-complex-report.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: cargo-demo-reports-${{ matrix.os }}
+          path: depbisect-cargo*-report.json
+          if-no-files-found: ignore
+
+  demo-go:
+    name: Go CLI smoke test against example repo
+    # The example repo is fully offline (generated file:// module proxy with
+    # GOSUMDB=off), so no modules are downloaded from the network.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: Generate Go example repo
+        run: ./examples/make-demo-go.sh
+      - name: Build CLI
+        run: go build ./cmd/depbisect
+      - name: Bisect the Go example repo
+        env:
+          GOPROXY: file://${{ github.workspace }}/examples/demo-go/proxy
+          GOSUMDB: "off"
+          GOFLAGS: -mod=mod
+          GOTOOLCHAIN: local
+        run: |
+          ./depbisect run \
+            --repo examples/demo-go/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --report-json depbisect-go-report.json \
+            -- go test ./...
+      - name: Assert the culprit was identified
+        run: |
+          jq -e '.outcome == "minimal-set-found" and .packageManager == "go" and (.minimalSet | length) == 1 and .minimalSet[0].name == "example.com/breakage"' depbisect-go-report.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: go-demo-reports-${{ matrix.os }}
+          path: depbisect-go-report.json
           if-no-files-found: ignore
 
   action-smoke:

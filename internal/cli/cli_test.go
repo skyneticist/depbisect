@@ -149,6 +149,19 @@ func TestCompletionCommands(t *testing.T) {
 		if !strings.Contains(stdout, "--style") {
 			t.Errorf("%s completion is missing --style:\n%s", shell, stdout)
 		}
+		if shell == "zsh" && !strings.Contains(stdout, "cargo") {
+			t.Errorf("zsh completion is missing the cargo --pm value:\n%s", stdout)
+		}
+	}
+}
+
+func TestHelpMentionsCargo(t *testing.T) {
+	code, stdout, _ := runCLI(t, "help")
+	if code != ExitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "cargo") || !strings.Contains(stdout, "Cargo.toml") {
+		t.Errorf("help should mention cargo and Cargo.toml:\n%s", stdout)
 	}
 }
 
