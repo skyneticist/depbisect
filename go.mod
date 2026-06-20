@@ -3,6 +3,7 @@ module github.com/skyneticist/depbisect
 go 1.20
 
 require (
+	github.com/pelletier/go-toml/v2 v2.2.2
 	golang.org/x/term v0.6.0
 	gopkg.in/yaml.v3 v3.0.1
 )
