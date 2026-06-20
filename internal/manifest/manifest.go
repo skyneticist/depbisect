@@ -1,4 +1,4 @@
-// Package manifest understands package.json manifests and npm/pnpm lockfiles.
+// Package manifest understands package.json, Cargo.toml, and go.mod manifests and their lockfiles.
 //
 // It provides structured parsing, diffing of direct dependency declarations
 // between two manifests, and rendering of candidate manifests in which an

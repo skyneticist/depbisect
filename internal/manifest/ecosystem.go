@@ -43,6 +43,8 @@ func EcosystemFor(manager string) (Ecosystem, error) {
 		return jsEcosystem{parseLock: ParsePnpmLock}, nil
 	case "cargo":
 		return cargoEcosystem{}, nil
+	case "go":
+		return goEcosystem{}, nil
 	default:
 		return nil, fmt.Errorf("no manifest handling for package manager %q", manager)
 	}
@@ -105,4 +107,29 @@ func (cargoEcosystem) Render(to Parsed, changes []Change, applied map[string]boo
 
 func (cargoEcosystem) LockfileOnly(old, new Parsed, oldR, newR Resolved) []LockfileChange {
 	return LockfileOnlyCargo(old.(*CargoToml), new.(*CargoToml), oldR, newR)
+}
+
+// goEcosystem handles go.mod manifests for Go modules.
+type goEcosystem struct{}
+
+func (goEcosystem) Parse(data []byte) (Parsed, error) {
+	g, err := ParseGoMod(data)
+	if err != nil {
+		return nil, err
+	}
+	return g, nil
+}
+
+func (goEcosystem) ParseLock(data []byte) (Resolved, error) { return ParseGoSum(data) }
+
+func (goEcosystem) Diff(old, new Parsed) []Change {
+	return DiffGo(old.(*GoMod), new.(*GoMod))
+}
+
+func (goEcosystem) Render(to Parsed, changes []Change, applied map[string]bool) ([]byte, error) {
+	return RenderGoMod(to.(*GoMod), changes, applied)
+}
+
+func (goEcosystem) LockfileOnly(old, new Parsed, oldR, newR Resolved) []LockfileChange {
+	return LockfileOnlyGo(old.(*GoMod), new.(*GoMod), oldR, newR)
 }
