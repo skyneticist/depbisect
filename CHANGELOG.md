@@ -11,7 +11,13 @@ All notable changes to this project are documented here. The format follows
 - Rust / Cargo support: bisect direct `Cargo.toml` dependency changes, with
   `cargo fetch` candidate installs and resolved-version annotations from
   `Cargo.lock`. Auto-detected from `Cargo.toml`, or select with `--pm cargo`.
-  DepBisect is now multi-ecosystem (npm, pnpm, cargo) behind one engine.
+- Go modules support: bisect direct `go.mod` `require` changes, parsed and
+  rendered with `golang.org/x/mod/modfile` so candidates preserve formatting,
+  with `go mod download` candidate installs (`GOFLAGS=-mod=mod`) and
+  resolved-version annotations from `go.sum`. Auto-detected from `go.mod`, or
+  select with `--pm go`; indirect and `replace`d requires are skipped, and
+  `go.work` workspaces are unsupported. DepBisect is now multi-ecosystem
+  (npm, pnpm, cargo, go) behind one engine.
 - `--jobs` / `-j` to evaluate candidate trials in parallel, each in its own
   isolated worktree. The minimized set is identical at any job count; the
   verification command must be safe to run concurrently. Each ddmin
