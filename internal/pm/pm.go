@@ -1,4 +1,5 @@
-// Package pm abstracts the supported JavaScript package managers.
+// Package pm abstracts the supported package managers across ecosystems:
+// npm and pnpm for JavaScript, and cargo for Rust.
 package pm
 
 import (
@@ -15,8 +16,9 @@ import (
 type Manager string
 
 const (
-	NPM  Manager = "npm"
-	PNPM Manager = "pnpm"
+	NPM   Manager = "npm"
+	PNPM  Manager = "pnpm"
+	CARGO Manager = "cargo"
 )
 
 // Detect chooses the package manager from lockfile presence at the target
@@ -30,8 +32,10 @@ func Detect(hasPackageLock, hasPnpmLock bool, override string) (Manager, error) 
 		return NPM, nil
 	case string(PNPM):
 		return PNPM, nil
+	case string(CARGO):
+		return CARGO, nil
 	default:
-		return "", fmt.Errorf("unsupported package manager %q (supported: npm, pnpm)", override)
+		return "", fmt.Errorf("unsupported package manager %q (supported: npm, pnpm, cargo)", override)
 	}
 	switch {
 	case hasPackageLock && hasPnpmLock:
@@ -48,21 +52,42 @@ func Detect(hasPackageLock, hasPnpmLock bool, override string) (Manager, error) 
 
 // LockfileName returns the manager's lockfile filename.
 func (m Manager) LockfileName() string {
-	if m == PNPM {
+	switch m {
+	case PNPM:
 		return "pnpm-lock.yaml"
+	case CARGO:
+		return "Cargo.lock"
+	default:
+		return "package-lock.json"
 	}
-	return "package-lock.json"
+}
+
+// ManifestName returns the dependency manifest filename for the manager's
+// ecosystem.
+func (m Manager) ManifestName() string {
+	if m == CARGO {
+		return "Cargo.toml"
+	}
+	return "package.json"
 }
 
 // installArgs returns the argument vector for a candidate installation.
 func (m Manager) installArgs() []string {
-	if m == PNPM {
+	switch m {
+	case PNPM:
 		// pnpm enables --frozen-lockfile automatically when CI=true;
 		// candidate manifests intentionally disagree with the lockfile,
 		// so freezing must be disabled explicitly.
 		return []string{"install", "--no-frozen-lockfile"}
+	case CARGO:
+		// cargo fetch resolves and downloads dependencies (updating Cargo.lock
+		// to match the candidate manifest) without compiling. Build and test
+		// failures — the signal DepBisect bisects — are left to the verify
+		// command.
+		return []string{"fetch"}
+	default:
+		return []string{"install", "--no-audit", "--no-fund", "--loglevel=error"}
 	}
-	return []string{"install", "--no-audit", "--no-fund", "--loglevel=error"}
 }
 
 // Installer installs dependencies in candidate worktrees.
@@ -98,6 +123,11 @@ func (i Installer) Version(ctx context.Context) (string, error) {
 	version := firstNonEmptyLine(res.Stdout)
 	if version == "no output" {
 		return "", fmt.Errorf("inspect package manager %q version: command produced no output", i.Manager)
+	}
+	// cargo --version already prints "cargo x.y.z"; npm and pnpm print only the
+	// bare number, so the manager name is prefixed only when not already present.
+	if strings.HasPrefix(version, string(i.Manager)) {
+		return version, nil
 	}
 	return fmt.Sprintf("%s %s", i.Manager, version), nil
 }
