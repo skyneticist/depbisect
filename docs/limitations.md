@@ -2,10 +2,10 @@
 
 ## Not supported (DepBisect refuses with a clear error)
 
-- **Workspaces.** npm/yarn `workspaces` in `package.json` and `pnpm-workspace.yaml` repositories.
-- **Yarn.** Only npm and pnpm lockfiles are recognized.
-- **Missing lockfile.** A `package-lock.json` or `pnpm-lock.yaml` must exist at `--to` (or pass `--pm` explicitly to proceed without resolution info).
-- **Ambiguous lockfiles.** If both lockfiles exist, choose with `--pm npm` or `--pm pnpm`.
+- **Workspaces.** npm/yarn `workspaces` in `package.json`, `pnpm-workspace.yaml` repositories, and Cargo `[workspace]` manifests (including virtual manifests).
+- **Yarn.** For JavaScript, only npm and pnpm lockfiles are recognized.
+- **Missing JavaScript lockfile.** For npm/pnpm a `package-lock.json` or `pnpm-lock.yaml` must exist at `--to` (or pass `--pm` explicitly). Cargo needs no lockfile — `Cargo.lock` is optional and only enriches diagnostics.
+- **Ambiguous detection.** If both a `package.json` and a `Cargo.toml` exist, or both JavaScript lockfiles exist, choose with `--pm npm|pnpm|cargo`.
 
 ## Supported but with caveats (reported as diagnostics, never silent)
 
@@ -29,6 +29,9 @@
   filesystem deletion is synchronous and cannot be canceled, so a stalled
   filesystem can extend process runtime beyond the overall timeout.
 - **Version spec edge cases.** pnpm v5 lockfile versions with both build metadata and a peer suffix (e.g. `1.2.3+build_meta`) may display a truncated resolved version. Display-only; does not affect bisection.
+- **Cargo without a lockfile.** `Cargo.lock` is optional; without it, resolved-version annotations and lockfile-only diagnostics are unavailable, but bisection still works (candidates resolve via `cargo fetch`).
+- **Cargo non-versioned dependencies.** `git`, `path`, and workspace-inherited (`foo.workspace = true`) dependencies carry no version requirement and are not bisected.
+- **Cargo candidate formatting.** Candidate `Cargo.toml` files are re-serialized, so comments and original formatting are not preserved (visible only under `--keep-worktrees`). Reverting a *removed* table-form dependency restores its version but not sibling keys such as `features`.
 
 ## Interpreting non-zero exits
 

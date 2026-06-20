@@ -80,3 +80,57 @@ func FuzzParsePnpmLock(f *testing.F) {
 		}
 	})
 }
+
+// FuzzParseCargoToml checks that Cargo.toml parsing never panics and that any
+// manifest which parses cleanly round-trips: rendering it with no changes
+// applied and re-parsing must yield an identical set of dependency
+// declarations.
+func FuzzParseCargoToml(f *testing.F) {
+	f.Add([]byte("[package]\nname = \"demo\"\n[dependencies]\na = \"1.0\"\n"))
+	f.Add([]byte("[dependencies]\na = { version = \"1\", features = [\"x\"] }\n"))
+	f.Add([]byte("[dependencies]\na = { path = \"../a\" }\n"))
+	f.Add([]byte("[workspace]\nmembers = [\"crates/*\"]\n"))
+	f.Add([]byte("not toml ["))
+	f.Add([]byte(""))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		c, err := ParseCargoToml(data)
+		if err != nil {
+			return // rejecting malformed input is fine; it must just not panic.
+		}
+		rendered, err := RenderCargo(c, nil, nil)
+		if err != nil {
+			t.Fatalf("RenderCargo after successful parse: %v\ninput:\n%s", err, data)
+		}
+		c2, err := ParseCargoToml(rendered)
+		if err != nil {
+			t.Fatalf("re-parse of rendered manifest: %v\nrendered:\n%s", err, rendered)
+		}
+		if diff := DiffCargo(c, c2); len(diff) != 0 {
+			t.Fatalf("round-trip changed dependencies: %v\nrendered:\n%s", diff, rendered)
+		}
+	})
+}
+
+// FuzzParseCargoLock checks that Cargo.lock parsing never panics and is
+// deterministic: parsing identical bytes twice yields an identical result.
+func FuzzParseCargoLock(f *testing.F) {
+	f.Add([]byte("version = 3\n[[package]]\nname = \"a\"\nversion = \"1.0.0\"\n"))
+	f.Add([]byte("[[package]]\nname = \"a\"\nversion = \"1.0.0\"\n[[package]]\nname = \"a\"\nversion = \"2.0.0\"\n"))
+	f.Add([]byte("version = 4\n"))
+	f.Add([]byte("not toml ["))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		first, err := ParseCargoLock(data)
+		if err != nil {
+			return
+		}
+		second, err := ParseCargoLock(data)
+		if err != nil {
+			t.Fatalf("non-deterministic error on identical input: %v", err)
+		}
+		if !reflect.DeepEqual(first, second) {
+			t.Fatalf("non-deterministic parse: %v vs %v", first, second)
+		}
+	})
+}

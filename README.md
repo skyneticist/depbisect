@@ -1,6 +1,6 @@
 # DepBisect
 
-> **`git bisect`, but for dependency updates.** Find the smallest set of `package.json` changes between two Git revisions that makes a command fail — and prove it's minimal.
+> **`git bisect`, but for dependency updates.** Find the smallest set of dependency changes between two Git revisions that makes a command fail — and prove it's minimal.
 
 <!-- Badges render once the repository is public. -->
 [![CI](https://github.com/skyneticist/depbisect/actions/workflows/ci.yml/badge.svg)](https://github.com/skyneticist/depbisect/actions/workflows/ci.yml)
@@ -11,13 +11,14 @@
 
 You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 
-`git bisect` walks *commits* — it can't help when the breakage lives inside a single dependency-update commit. DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies declared in `package.json` between two revisions, then applies [delta debugging](https://www.cs.purdue.edu/homes/xyzhang/fall07/Papers/delta-debugging.pdf) to isolate the exact subset responsible — all inside a throwaway worktree that never touches your checkout.
+`git bisect` walks *commits* — it can't help when the breakage lives inside a single dependency-update commit. DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies declared in your manifest (`package.json` or `Cargo.toml`) between two revisions, then applies [delta debugging](https://www.cs.purdue.edu/homes/xyzhang/fall07/Papers/delta-debugging.pdf) to isolate the exact subset responsible — all inside a throwaway worktree that never touches your checkout.
 
 ![DepBisect narrowing 12 dependency changes down to the 5-package set that broke the build](docs/demo.gif)
 
 ## Features
 
 - **Provably minimal.** Runs Zeller's `ddmin` delta-debugging algorithm plus a one-by-one removal pass, so the answer is *1-minimal* — removing any single dependency from the set makes the failure stop reproducing — not merely "some failing subset."
+- **Multi-ecosystem.** JavaScript (`npm`, `pnpm`) and Rust (`cargo`), auto-detected from the manifest or selected with `--pm`. The same engine and 1-minimality proof back every ecosystem.
 - **Never touches your checkout.** Every install happens in a DepBisect-owned temporary git worktree. `git reset --hard` and `git clean -ffdx` run *only* there, never in your working tree.
 - **Flaky-test aware.** `--runs N` repeats each check; a candidate counts as failing only if *all* N runs fail. Mixed pass/fail results are reported as diagnostics, never silently guessed.
 - **Resumable.** Completed trials are checkpointed to disk. Interrupt with Ctrl-C, then pick up exactly where you left off with `--resume`.
@@ -41,7 +42,7 @@ You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 ## Install
 
 DepBisect ships as a single static binary — pick whichever method fits. You'll
-also need `git` and either `npm` or `pnpm` on your `PATH`.
+also need `git` and your project's package manager (`npm`, `pnpm`, or `cargo`) on your `PATH`.
 
 **npm / pnpm** — no Go toolchain required:
 
@@ -101,6 +102,12 @@ depbisect run --base origin/main --runs 3 -- npm test
 
 # 3. Interrupted? Re-run the same command with --resume to continue:
 depbisect run --base origin/main --runs 3 --resume -- npm test
+```
+
+**Working in Rust?** Same flow — point the command at Cargo (auto-detected from `Cargo.toml`):
+
+```sh
+depbisect run --base origin/main --runs 3 -- cargo test
 ```
 
 **Preview before you commit to a run.** `--dry-run` resolves `--base..HEAD`, diffs the

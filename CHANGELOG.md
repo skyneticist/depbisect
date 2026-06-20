@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Rust / Cargo support: bisect direct `Cargo.toml` dependency changes, with
+  `cargo fetch` candidate installs and resolved-version annotations from
+  `Cargo.lock`. Auto-detected from `Cargo.toml`, or select with `--pm cargo`.
+  DepBisect is now multi-ecosystem (npm, pnpm, cargo) behind one engine.
 - `--jobs` / `-j` to evaluate candidate trials in parallel, each in its own
   isolated worktree. The minimized set is identical at any job count; the
   verification command must be safe to run concurrently. Each ddmin
