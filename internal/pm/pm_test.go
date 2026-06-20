@@ -25,6 +25,7 @@ func TestDetect(t *testing.T) {
 		{name: "both with override", npmLock: true, pnpmLock: true, override: "pnpm", want: PNPM},
 		{name: "neither", wantErrPart: "lockfile"},
 		{name: "neither with override", override: "npm", want: NPM},
+		{name: "cargo override", override: "cargo", want: CARGO},
 		{name: "bad override", override: "yarn", wantErrPart: "yarn"},
 	}
 	for _, tc := range cases {
@@ -47,8 +48,16 @@ func TestDetect(t *testing.T) {
 }
 
 func TestLockfileNames(t *testing.T) {
-	if NPM.LockfileName() != "package-lock.json" || PNPM.LockfileName() != "pnpm-lock.yaml" {
+	if NPM.LockfileName() != "package-lock.json" || PNPM.LockfileName() != "pnpm-lock.yaml" ||
+		CARGO.LockfileName() != "Cargo.lock" {
 		t.Error("wrong lockfile names")
+	}
+}
+
+func TestManifestNames(t *testing.T) {
+	if NPM.ManifestName() != "package.json" || PNPM.ManifestName() != "package.json" ||
+		CARGO.ManifestName() != "Cargo.toml" {
+		t.Error("wrong manifest names")
 	}
 }
 
@@ -87,6 +96,19 @@ func TestInstallInvocation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(c2.ExtraEnv, []string(nil)) && len(c2.ExtraEnv) != 0 {
 		t.Errorf("unexpected extra env: %v", c2.ExtraEnv)
+	}
+
+	fakeCargo := execx.NewFake()
+	instCargo := Installer{Runner: fakeCargo, Manager: CARGO}
+	if _, err := instCargo.Install(context.Background(), "/c", nil); err != nil {
+		t.Fatal(err)
+	}
+	cc := fakeCargo.Calls()[0]
+	if cc.Name != "cargo" || !reflect.DeepEqual(cc.Args, []string{"fetch"}) {
+		t.Errorf("cargo install cmd = %+v, want cargo fetch", cc)
+	}
+	if !cc.AllowTrustedBatch {
+		t.Error("cargo invocation must allow its fixed arguments through Windows batch shims")
 	}
 }
 
@@ -167,5 +189,20 @@ func TestVersion(t *testing.T) {
 				t.Errorf("version command = %+v, want --version with AllowTrustedBatch", call)
 			}
 		})
+	}
+}
+
+func TestVersionCargo(t *testing.T) {
+	// cargo --version already includes the "cargo" prefix; Version must not
+	// double it the way it prefixes the bare npm/pnpm numbers.
+	fake := execx.NewFake()
+	fake.Default.Result = execx.Result{Stdout: []byte("cargo 1.75.0 (1d8b05cdd 2023-11-20)\n")}
+	inst := Installer{Runner: fake, Manager: CARGO, LookPath: found}
+	id, err := inst.Version(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "cargo 1.75.0 (1d8b05cdd 2023-11-20)" {
+		t.Errorf("identity = %q, want unprefixed cargo version", id)
 	}
 }
