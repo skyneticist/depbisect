@@ -26,6 +26,7 @@ func TestDetect(t *testing.T) {
 		{name: "neither", wantErrPart: "lockfile"},
 		{name: "neither with override", override: "npm", want: NPM},
 		{name: "cargo override", override: "cargo", want: CARGO},
+		{name: "go override", override: "go", want: GO},
 		{name: "bad override", override: "yarn", wantErrPart: "yarn"},
 	}
 	for _, tc := range cases {
@@ -49,14 +50,14 @@ func TestDetect(t *testing.T) {
 
 func TestLockfileNames(t *testing.T) {
 	if NPM.LockfileName() != "package-lock.json" || PNPM.LockfileName() != "pnpm-lock.yaml" ||
-		CARGO.LockfileName() != "Cargo.lock" {
+		CARGO.LockfileName() != "Cargo.lock" || GO.LockfileName() != "go.sum" {
 		t.Error("wrong lockfile names")
 	}
 }
 
 func TestManifestNames(t *testing.T) {
 	if NPM.ManifestName() != "package.json" || PNPM.ManifestName() != "package.json" ||
-		CARGO.ManifestName() != "Cargo.toml" {
+		CARGO.ManifestName() != "Cargo.toml" || GO.ManifestName() != "go.mod" {
 		t.Error("wrong manifest names")
 	}
 }
@@ -109,6 +110,21 @@ func TestInstallInvocation(t *testing.T) {
 	}
 	if !cc.AllowTrustedBatch {
 		t.Error("cargo invocation must allow its fixed arguments through Windows batch shims")
+	}
+
+	fakeGo := execx.NewFake()
+	instGo := Installer{Runner: fakeGo, Manager: GO}
+	if _, err := instGo.Install(context.Background(), "/g", nil); err != nil {
+		t.Fatal(err)
+	}
+	gc := fakeGo.Calls()[0]
+	if gc.Name != "go" || !reflect.DeepEqual(gc.Args, []string{"mod", "download"}) {
+		t.Errorf("go install cmd = %+v, want go mod download", gc)
+	}
+	// Candidate go.mod edits add or revert versions; -mod=mod lets `go mod
+	// download` populate go.sum (and reconcile go.mod) for them.
+	if !reflect.DeepEqual(gc.ExtraEnv, []string{"GOFLAGS=-mod=mod"}) {
+		t.Errorf("go install env = %v, want [GOFLAGS=-mod=mod]", gc.ExtraEnv)
 	}
 }
 
@@ -204,5 +220,23 @@ func TestVersionCargo(t *testing.T) {
 	}
 	if id != "cargo 1.75.0 (1d8b05cdd 2023-11-20)" {
 		t.Errorf("identity = %q, want unprefixed cargo version", id)
+	}
+}
+
+func TestVersionGo(t *testing.T) {
+	// `go version` (not `go --version`) prints "go version goX.Y ..."; Version
+	// must invoke the subcommand and must not double the leading "go".
+	fake := execx.NewFake()
+	fake.Default.Result = execx.Result{Stdout: []byte("go version go1.22.0 darwin/arm64\n")}
+	inst := Installer{Runner: fake, Manager: GO, LookPath: found}
+	id, err := inst.Version(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "go version go1.22.0 darwin/arm64" {
+		t.Errorf("identity = %q", id)
+	}
+	if call := fake.Calls()[0]; !reflect.DeepEqual(call.Args, []string{"version"}) {
+		t.Errorf("version args = %v, want [version]", call.Args)
 	}
 }
