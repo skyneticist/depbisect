@@ -48,7 +48,7 @@ _depbisect() {
                 '--run-timeout[timeout per run]:duration:' \
                 '--install-timeout[timeout per dependency install]:duration:' \
                 '--overall-timeout[timeout for the complete bisection]:duration:' \
-                '--pm[package manager]:pm:(npm pnpm)' \
+                '--pm[package manager]:pm:(npm pnpm cargo go)' \
                 '--report-md[markdown report path]:path:_files' \
                 '--report-json[json report path]:path:_files' \
                 '--no-reports[write no reports]' \

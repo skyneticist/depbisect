@@ -1,4 +1,4 @@
-// Package manifest understands package.json manifests and npm/pnpm lockfiles.
+// Package manifest understands package.json, Cargo.toml, and go.mod manifests and their lockfiles.
 //
 // It provides structured parsing, diffing of direct dependency declarations
 // between two manifests, and rendering of candidate manifests in which an
@@ -155,10 +155,18 @@ func (c Change) String() string {
 // Diff computes the direct dependency changes from old to new. The result is
 // sorted by dependency name, then section, and is deterministic.
 func Diff(old, new *PackageJSON) []Change {
+	return diffSections(old.Sections, new.Sections, sectionOrder)
+}
+
+// diffSections computes the direct dependency changes between two sets of
+// dependency sections, processed in the given order. The result is sorted by
+// dependency name, then section, and is deterministic. It is shared by every
+// ecosystem's manifest diff.
+func diffSections(old, new map[Section]map[string]string, order []Section) []Change {
 	var changes []Change
-	for _, sec := range sectionOrder {
-		oldDeps := old.Sections[sec]
-		newDeps := new.Sections[sec]
+	for _, sec := range order {
+		oldDeps := old[sec]
+		newDeps := new[sec]
 		for name, oldSpec := range oldDeps {
 			newSpec, ok := newDeps[name]
 			switch {

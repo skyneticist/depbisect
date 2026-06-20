@@ -1,4 +1,5 @@
-// Package pm abstracts the supported JavaScript package managers.
+// Package pm abstracts the supported package managers across ecosystems:
+// npm and pnpm for JavaScript, cargo for Rust, and go for Go.
 package pm
 
 import (
@@ -15,8 +16,10 @@ import (
 type Manager string
 
 const (
-	NPM  Manager = "npm"
-	PNPM Manager = "pnpm"
+	NPM   Manager = "npm"
+	PNPM  Manager = "pnpm"
+	CARGO Manager = "cargo"
+	GO    Manager = "go"
 )
 
 // Detect chooses the package manager from lockfile presence at the target
@@ -30,8 +33,12 @@ func Detect(hasPackageLock, hasPnpmLock bool, override string) (Manager, error) 
 		return NPM, nil
 	case string(PNPM):
 		return PNPM, nil
+	case string(CARGO):
+		return CARGO, nil
+	case string(GO):
+		return GO, nil
 	default:
-		return "", fmt.Errorf("unsupported package manager %q (supported: npm, pnpm)", override)
+		return "", fmt.Errorf("unsupported package manager %q (supported: npm, pnpm, cargo, go)", override)
 	}
 	switch {
 	case hasPackageLock && hasPnpmLock:
@@ -48,21 +55,64 @@ func Detect(hasPackageLock, hasPnpmLock bool, override string) (Manager, error) 
 
 // LockfileName returns the manager's lockfile filename.
 func (m Manager) LockfileName() string {
-	if m == PNPM {
+	switch m {
+	case PNPM:
 		return "pnpm-lock.yaml"
+	case CARGO:
+		return "Cargo.lock"
+	case GO:
+		return "go.sum"
+	default:
+		return "package-lock.json"
 	}
-	return "package-lock.json"
+}
+
+// ManifestName returns the dependency manifest filename for the manager's
+// ecosystem.
+func (m Manager) ManifestName() string {
+	switch m {
+	case CARGO:
+		return "Cargo.toml"
+	case GO:
+		return "go.mod"
+	default:
+		return "package.json"
+	}
 }
 
 // installArgs returns the argument vector for a candidate installation.
 func (m Manager) installArgs() []string {
-	if m == PNPM {
+	switch m {
+	case PNPM:
 		// pnpm enables --frozen-lockfile automatically when CI=true;
 		// candidate manifests intentionally disagree with the lockfile,
 		// so freezing must be disabled explicitly.
 		return []string{"install", "--no-frozen-lockfile"}
+	case CARGO:
+		// cargo fetch resolves and downloads dependencies (updating Cargo.lock
+		// to match the candidate manifest) without compiling. Build and test
+		// failures — the signal DepBisect bisects — are left to the verify
+		// command.
+		return []string{"fetch"}
+	case GO:
+		// `go mod download` resolves and fetches the modules named by the
+		// candidate go.mod and records their checksums in go.sum, without
+		// compiling. Build and test failures are left to the verify command.
+		return []string{"mod", "download"}
+	default:
+		return []string{"install", "--no-audit", "--no-fund", "--loglevel=error"}
 	}
-	return []string{"install", "--no-audit", "--no-fund", "--loglevel=error"}
+}
+
+// installEnv returns extra environment for a candidate installation. Go runs
+// with -mod=mod so `go mod download` may add go.sum checksums (and reconcile
+// go.mod) for the reverted module versions a candidate introduces; the other
+// managers need none.
+func (m Manager) installEnv() []string {
+	if m == GO {
+		return []string{"GOFLAGS=-mod=mod"}
+	}
+	return nil
 }
 
 // Installer installs dependencies in candidate worktrees.
@@ -71,6 +121,16 @@ type Installer struct {
 	Manager Manager
 	// LookPath overrides exec.LookPath in tests.
 	LookPath func(string) (string, error)
+}
+
+// versionArgs returns the argument vector that prints the manager's version.
+// Most managers accept "--version"; the go tool uses the "version" subcommand
+// instead (`go --version` is not valid).
+func (m Manager) versionArgs() []string {
+	if m == GO {
+		return []string{"version"}
+	}
+	return []string{"--version"}
 }
 
 // Version verifies the executable is available and returns its reported version.
@@ -85,7 +145,7 @@ func (i Installer) Version(ctx context.Context) (string, error) {
 	}
 	res, err := i.Runner.Run(ctx, execx.Cmd{
 		Name:              string(i.Manager),
-		Args:              []string{"--version"},
+		Args:              i.Manager.versionArgs(),
 		AllowTrustedBatch: true,
 	})
 	if err != nil {
@@ -99,6 +159,11 @@ func (i Installer) Version(ctx context.Context) (string, error) {
 	if version == "no output" {
 		return "", fmt.Errorf("inspect package manager %q version: command produced no output", i.Manager)
 	}
+	// cargo --version already prints "cargo x.y.z"; npm and pnpm print only the
+	// bare number, so the manager name is prefixed only when not already present.
+	if strings.HasPrefix(version, string(i.Manager)) {
+		return version, nil
+	}
 	return fmt.Sprintf("%s %s", i.Manager, version), nil
 }
 
@@ -109,6 +174,7 @@ func (i Installer) Install(ctx context.Context, dir string, stream io.Writer) (e
 		Dir:               dir,
 		Name:              string(i.Manager),
 		Args:              i.Manager.installArgs(),
+		ExtraEnv:          i.Manager.installEnv(),
 		AllowTrustedBatch: true,
 		Stream:            stream,
 	})

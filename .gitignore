@@ -1,5 +1,6 @@
 /depbisect
 /dist/
+docs/assets
 coverage.out
 depbisect-report.md
 depbisect-report.json

@@ -167,10 +167,15 @@ type LockfileChange struct {
 // whose resolved versions nonetheless differ. Dependencies with an unknown
 // resolution on either side are skipped.
 func LockfileOnly(old, new *PackageJSON, oldR, newR Resolved) []LockfileChange {
+	return lockfileOnly(old.Sections, new.Sections, oldR, newR, sectionOrder)
+}
+
+// lockfileOnly is the section-order-agnostic core shared by every ecosystem.
+func lockfileOnly(old, new map[Section]map[string]string, oldR, newR Resolved, order []Section) []LockfileChange {
 	var out []LockfileChange
-	for _, sec := range sectionOrder {
-		for name, spec := range new.Sections[sec] {
-			oldSpec, ok := old.Sections[sec][name]
+	for _, sec := range order {
+		for name, spec := range new[sec] {
+			oldSpec, ok := old[sec][name]
 			if !ok || oldSpec != spec {
 				continue // added or spec-changed: handled by Diff
 			}

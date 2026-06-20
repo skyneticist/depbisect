@@ -1,8 +1,9 @@
 name: DepBisect
 description: >-
-  Find the smallest set of package.json dependency updates between two Git
-  revisions that makes a command fail. Requires a checkout with enough history
-  to contain the base revision (actions/checkout with fetch-depth: 0).
+  Find the smallest set of dependency updates (package.json, Cargo.toml, or
+  go.mod) between two Git revisions that makes a command fail. Requires a
+  checkout with enough history to contain the base revision (actions/checkout
+  with fetch-depth: 0).
 branding:
   icon: git-commit
   color: orange
@@ -25,7 +26,7 @@ inputs:
     required: false
     default: "1"
   pm:
-    description: Package manager override (npm or pnpm). Default autodetect.
+    description: Package manager override (npm, pnpm, cargo, or go). Default autodetect.
     required: false
     default: ""
   run-timeout:
