@@ -186,6 +186,12 @@ func ParseCargoLock(data []byte) (Resolved, error) {
 	return out, nil
 }
 
+// LockfileOnlyCargo returns dependencies declared identically in both Cargo
+// manifests whose Cargo.lock resolution nonetheless differs.
+func LockfileOnlyCargo(old, new *CargoToml, oldR, newR Resolved) []LockfileChange {
+	return lockfileOnly(old.Sections, new.Sections, oldR, newR, cargoSectionOrder)
+}
+
 // deepCopyMap returns a recursively independent copy of a decoded TOML document
 // so rendering never mutates the shared parse result.
 func deepCopyMap(m map[string]any) map[string]any {

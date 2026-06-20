@@ -30,7 +30,9 @@ type executor struct {
 	now       func() time.Time
 
 	toSHA        string
-	toPkg        *manifest.PackageJSON
+	toManifest   manifest.Parsed
+	eco          manifest.Ecosystem
+	manifestName string
 	changes      []manifest.Change
 	totalChanges int
 
@@ -96,11 +98,11 @@ func (ex *executor) eval(ctx context.Context, subset []manifest.Change, role str
 	}
 	sort.Strings(trial.Applied)
 
-	rendered, err := manifest.Render(ex.toPkg, ex.changes, applied)
+	rendered, err := ex.eco.Render(ex.toManifest, ex.changes, applied)
 	if err != nil {
 		return Trial{}, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, manifestName), rendered, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ex.manifestName), rendered, 0o644); err != nil {
 		return Trial{}, fmt.Errorf("write candidate manifest: %w", err)
 	}
 	afterPrepare := ex.now()
