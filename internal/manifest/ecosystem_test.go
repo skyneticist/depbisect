@@ -68,3 +68,56 @@ func TestLockfileOnlyCargo(t *testing.T) {
 		t.Errorf("resolved versions = %+v", got[0])
 	}
 }
+
+func TestEcosystemParseLock(t *testing.T) {
+	cases := []struct {
+		manager, lock, name, ver string
+	}{
+		{"npm", `{"lockfileVersion":3,"packages":{"node_modules/a":{"version":"1.2.3"}}}`, "a", "1.2.3"},
+		{"pnpm", "lockfileVersion: '6.0'\ndependencies:\n  a:\n    specifier: ^1\n    version: 1.2.3\n", "a", "1.2.3"},
+		{"cargo", "[[package]]\nname = \"a\"\nversion = \"1.2.3\"\n", "a", "1.2.3"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.manager, func(t *testing.T) {
+			eco, err := EcosystemFor(tc.manager)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := eco.ParseLock([]byte(tc.lock))
+			if err != nil {
+				t.Fatalf("ParseLock: %v", err)
+			}
+			if res[tc.name] != tc.ver {
+				t.Errorf("%s resolved = %q, want %q", tc.name, res[tc.name], tc.ver)
+			}
+		})
+	}
+}
+
+func TestEcosystemLockfileOnly(t *testing.T) {
+	// Each ecosystem flags a dependency whose spec is unchanged but whose
+	// resolved version moved, through the interface.
+	js, _ := EcosystemFor("npm")
+	jsOld, _ := js.Parse([]byte(basePkg))
+	jsNew, _ := js.Parse([]byte(basePkg))
+	if lo := js.LockfileOnly(jsOld, jsNew, Resolved{"alpha": "1.0.0"}, Resolved{"alpha": "1.5.0"}); len(lo) != 1 || lo[0].Name != "alpha" {
+		t.Errorf("js LockfileOnly = %+v, want [alpha]", lo)
+	}
+
+	cargo, _ := EcosystemFor("cargo")
+	cOld, _ := cargo.Parse([]byte(baseCargo))
+	cNew, _ := cargo.Parse([]byte(baseCargo))
+	if lo := cargo.LockfileOnly(cOld, cNew, Resolved{"serde": "1.0.130"}, Resolved{"serde": "1.0.200"}); len(lo) != 1 || lo[0].Name != "serde" {
+		t.Errorf("cargo LockfileOnly = %+v, want [serde]", lo)
+	}
+}
+
+func TestEcosystemParseError(t *testing.T) {
+	cases := map[string]string{"npm": "{not json", "cargo": "not = = toml [["}
+	for manager, bad := range cases {
+		eco, _ := EcosystemFor(manager)
+		if _, err := eco.Parse([]byte(bad)); err == nil {
+			t.Errorf("%s Parse(malformed) = nil error, want error", manager)
+		}
+	}
+}

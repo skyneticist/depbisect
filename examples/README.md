@@ -148,3 +148,45 @@ go build ./cmd/depbisect
 
 Both runs report the identical twelve-package minimal set (`replica-01` …
 `replica-12`). Re-run `make-demo-swarm.sh` to reset the generated repository.
+
+## Rust / Cargo demos
+
+`make-demo-cargo.sh` and `make-demo-cargo-complex.sh` generate the Cargo
+equivalents of the first two demos at `examples/demo-cargo/` and
+`examples/demo-cargo-complex/`. They need `git` and `cargo` but **no network**:
+each crate version is served from a committed vendored directory registry with
+`[net] offline = true`, so bisection runs entirely offline.
+
+The simple demo bumps two crates; only `breakage 1.0.0 -> 2.0.0` breaks
+`cargo test`:
+
+```sh
+./examples/make-demo-cargo.sh
+go build ./cmd/depbisect
+./depbisect run --repo examples/demo-cargo/app --base HEAD~1 --runs 3 -- cargo test
+```
+
+Expected result: minimal failing set = `breakage 1.0.0 -> 2.0.0`.
+
+The complex demo bumps twelve crates across `[dependencies]` and
+`[dev-dependencies]`. The app keeps working while either its primary wire path
+or its cache fallback survives, so it fails only once all three `wire_*` crates
+and both `cache_*` crates reach their new versions — a five-crate minimal set:
+
+```sh
+./examples/make-demo-cargo-complex.sh
+./depbisect run --repo examples/demo-cargo-complex/app --base HEAD~1 --runs 3 -- cargo test
+```
+
+```text
+     Changes 12 analyzed
+
+Breaking dependencies
+  - cache_reader 1.0.0 -> 2.0.0
+  - cache_writer 1.0.0 -> 2.0.0
+  - wire_decoder 1.0.0 -> 2.0.0
+  - wire_encoder 1.0.0 -> 2.0.0
+  - wire_transport 1.0.0 -> 2.0.0
+```
+
+Re-run either script to reset its generated repository.

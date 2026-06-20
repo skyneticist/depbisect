@@ -234,3 +234,27 @@ version = "0.9.15"
 		t.Error("serde missing from resolved set")
 	}
 }
+
+func TestParseCargoTomlSkipsValuelessDeps(t *testing.T) {
+	// git, empty-version, and non-table/non-string deps carry no version and
+	// must be skipped rather than bisected.
+	c := mustParseCargo(t, "[dependencies]\ngit_dep = { git = \"x\" }\nempty_ver = { version = \"\" }\nnumeric = 1\n")
+	if got := c.Sections[CargoDependencies]; len(got) != 0 {
+		t.Errorf("expected all valueless deps skipped, got %v", got)
+	}
+}
+
+func TestRenderCargoReAddsRemovedSection(t *testing.T) {
+	// Reverting a removed dependency must recreate its section when the target
+	// manifest dropped the whole table.
+	base := mustParseCargo(t, "[package]\nname = \"d\"\n\n[build-dependencies]\ncc = \"1.0\"\n")
+	to := mustParseCargo(t, "[package]\nname = \"d\"\n")
+	changes := DiffCargo(base, to)
+	rendered, err := RenderCargo(to, changes, map[string]bool{})
+	if err != nil {
+		t.Fatalf("RenderCargo: %v", err)
+	}
+	if got := cargoSections(t, rendered)[CargoBuildDependencies]["cc"]; got != "1.0" {
+		t.Errorf("cc = %q, want re-added 1.0 into recreated section", got)
+	}
+}

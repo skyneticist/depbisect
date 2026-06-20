@@ -128,39 +128,40 @@ func (g *fakeGit) IsPathDirty(ctx context.Context, path string) (bool, error) {
 var errNotExistForTest = errors.New("file does not exist at revision")
 
 // readDeps parses the flattened dependency specs of the candidate manifest in
-// dir, handling both package.json and Cargo.toml repos.
+// dir. It prefers package.json (the JavaScript fixtures); a cargo-only repo has
+// no package.json and falls through to Cargo.toml.
 func readDeps(t testing.TB, dir string) map[string]string {
 	t.Helper()
-	if data, err := os.ReadFile(filepath.Join(dir, "Cargo.toml")); err == nil {
-		c, err := manifest.ParseCargoToml(data)
-		if err != nil {
-			t.Fatalf("parse candidate Cargo.toml: %v", err)
+	if data, err := os.ReadFile(filepath.Join(dir, "package.json")); err == nil {
+		var doc struct {
+			Dependencies    map[string]string `json:"dependencies"`
+			DevDependencies map[string]string `json:"devDependencies"`
+		}
+		if err := json.Unmarshal(data, &doc); err != nil {
+			t.Fatalf("parse candidate manifest: %v", err)
 		}
 		deps := map[string]string{}
-		for _, sec := range c.Sections {
-			for k, v := range sec {
-				deps[k] = v
-			}
+		for k, v := range doc.Dependencies {
+			deps[k] = v
+		}
+		for k, v := range doc.DevDependencies {
+			deps[k] = v
 		}
 		return deps
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	data, err := os.ReadFile(filepath.Join(dir, "Cargo.toml"))
 	if err != nil {
 		t.Fatalf("read candidate manifest: %v", err)
 	}
-	var doc struct {
-		Dependencies    map[string]string `json:"dependencies"`
-		DevDependencies map[string]string `json:"devDependencies"`
-	}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatalf("parse candidate manifest: %v", err)
+	c, err := manifest.ParseCargoToml(data)
+	if err != nil {
+		t.Fatalf("parse candidate Cargo.toml: %v", err)
 	}
 	deps := map[string]string{}
-	for k, v := range doc.Dependencies {
-		deps[k] = v
-	}
-	for k, v := range doc.DevDependencies {
-		deps[k] = v
+	for _, sec := range c.Sections {
+		for k, v := range sec {
+			deps[k] = v
+		}
 	}
 	return deps
 }
@@ -1275,5 +1276,58 @@ func TestRunManyChangesScales(t *testing.T) {
 	}
 	if len(res.Trials) > 60 {
 		t.Errorf("trials = %d, want O(log n)-ish for single culprit", len(res.Trials))
+	}
+}
+
+func TestRunDetectsAmbiguousEcosystems(t *testing.T) {
+	git := threeChangeRepo()
+	// A package.json (with its lockfile) and a Cargo.toml both present at --to
+	// is ambiguous without --pm.
+	git.files["sha-head"]["Cargo.toml"] = "[package]\nname = \"x\"\nversion = \"0.1.0\"\n"
+	env := newEnv(t, git, nil, 1)
+	_, err := env.eng.Run(context.Background(), baseOpts())
+	if err == nil || !strings.Contains(err.Error(), "both package.json and Cargo.toml") {
+		t.Fatalf("err = %v, want ambiguous-ecosystem error", err)
+	}
+	if len(env.tempDirs) != 0 {
+		t.Error("no worktree should be created when detection is ambiguous")
+	}
+}
+
+func TestRunNoManifestFound(t *testing.T) {
+	git := &fakeGit{
+		revs: map[string]string{"base": "sha-base", "HEAD": "sha-head"},
+		files: map[string]map[string]string{
+			"sha-base": {"README.md": "a"},
+			"sha-head": {"README.md": "b"},
+		},
+	}
+	env := newEnv(t, git, nil, 1)
+	_, err := env.eng.Run(context.Background(), baseOpts())
+	if err == nil || !strings.Contains(err.Error(), "no supported manifest") {
+		t.Fatalf("err = %v, want no-manifest error", err)
+	}
+}
+
+func TestRunPMOverrideWinsOverDetection(t *testing.T) {
+	git := threeChangeRepo()
+	// A stray Cargo.toml would make auto-detection ambiguous; --pm npm forces
+	// the JavaScript ecosystem regardless.
+	git.files["sha-base"]["Cargo.toml"] = "[package]\nname = \"x\"\nversion = \"0.1.0\"\n"
+	git.files["sha-head"]["Cargo.toml"] = "[package]\nname = \"x\"\nversion = \"0.1.0\"\n"
+	env := newEnv(t, git, func(deps map[string]string) bool {
+		return deps["beta"] == "3.2.0"
+	}, 1)
+	opts := baseOpts()
+	opts.PMOverride = "npm"
+	res, err := env.eng.Run(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.PackageManager != "npm" {
+		t.Errorf("pm = %q, want npm from override", res.PackageManager)
+	}
+	if ids(minimalNames(res)) != "beta" {
+		t.Errorf("minimal = %v, want [beta]", minimalNames(res))
 	}
 }
