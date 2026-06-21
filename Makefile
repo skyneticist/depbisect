@@ -13,14 +13,27 @@ COVER_MIN ?= 80.0
 
 .DEFAULT_GOAL := help
 
+##@ General
+
 .PHONY: help
 help: ## Show this help.
-	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+	@awk 'BEGIN {FS = ":.*## "} /^##@/ {printf "\n\033[1m%s\033[0m\n", substr($$0, 5); next} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+##@ Build & run
 
 .PHONY: build
 build: ## Build the depbisect binary into ./bin.
 	$(GO) build -o $(BINARY) ./cmd/depbisect
+
+.PHONY: install
+install: ## Install the binary with `go install` (honors GOBIN/GOPATH).
+	$(GO) install ./cmd/depbisect
+
+.PHONY: run
+run: build ## Build, then run it with ARGS (e.g. make run ARGS="run --base HEAD~1 -- npm test").
+	$(BINARY) $(ARGS)
+
+##@ Test & quality
 
 .PHONY: test
 test: ## Run the test suite (executes fuzz seed corpora too).
@@ -34,6 +47,10 @@ test-race: ## Run the test suite with the race detector.
 cover: ## Run tests with coverage and enforce the floor (override: make cover COVER_MIN=85).
 	$(GO) test -coverprofile=coverage.out $(PKG)
 	./scripts/check-coverage.sh coverage.out $(COVER_MIN)
+
+.PHONY: cover-html
+cover-html: cover ## Open the HTML coverage report in a browser (after `cover`).
+	$(GO) tool cover -html=coverage.out
 
 .PHONY: fmt
 fmt: ## Format all Go source in place.
@@ -66,23 +83,14 @@ fuzz: ## Fuzz each target for $(FUZZTIME) (override: make fuzz FUZZTIME=2m).
 bench: ## Run all benchmarks.
 	$(GO) test -run='^$$' -bench=. -benchmem ./...
 
-.PHONY: tidy
-tidy: ## Tidy go.mod / go.sum.
-	$(GO) mod tidy
-
 .PHONY: check
 check: fmt-check vet lint test test-race ## Run the full pre-PR gate.
 
-.PHONY: install-tools
-install-tools: ## Install the auxiliary dev tools (see notes for golangci-lint).
-	# golangci-lint bundles gofmt, govet, staticcheck, errcheck and more.
-	# Recent releases need a current Go toolchain to build from source, so
-	# install the prebuilt binary instead, e.g.:
-	#   brew install golangci-lint
-	# or see https://golangci-lint.run/welcome/install/
-	$(GO) install golang.org/x/vuln/cmd/govulncheck@latest
+.PHONY: ci
+ci: check cover vuln fuzz ## Full local pre-push mirror: check + cover + vuln + fuzz smoke.
+	@echo "ci: all local checks passed."
 
-# --- Example demos --------------------------------------------------------
+##@ Demos
 # Build, generate an offline example repo, and bisect it. Each target mirrors
 # the matching job in .github/workflows/ci.yml (demo / demo-cargo / demo-go /
 # demo-python), so a green `make demo*` predicts a green pipeline. Everything is
@@ -148,6 +156,46 @@ demo-python: build ## Python (uv): bisect the offline example repo (culprit: bre
 .PHONY: demos
 demos: demo demo-complex demo-jobs demo-swarm demo-cargo demo-go demo-python ## Run every demo above.
 	@echo "All demos passed."
+
+##@ Docker
+
+.PHONY: docker-build
+docker-build: ## Build the Docker image as depbisect:dev.
+	docker build -t depbisect:dev .
+
+.PHONY: docker-smoke
+docker-smoke: docker-build ## Mirror the CI docker image behaviour check (needs docker + node).
+	@mkdir -p $(BIN_DIR)
+	docker run --rm depbisect:dev help
+	docker run --rm --entrypoint sh depbisect:dev -eu -c 'git --version; node --version; npm --version; pnpm --version'
+	./examples/make-demo.sh
+	docker run --rm -v "$$PWD:$$PWD" -w "$$PWD" depbisect:dev run --repo "$$PWD/examples/demo/app" --base HEAD~1 --runs 3 -- node test.js | tee $(BIN_DIR)/bisect.log
+	grep -q leftpad $(BIN_DIR)/bisect.log
+
+##@ Release & media
+
+.PHONY: release-snapshot
+release-snapshot: ## Dry-run a release build with goreleaser (snapshot, no publish; needs goreleaser).
+	goreleaser release --snapshot --clean
+
+.PHONY: gifs
+gifs: ## Re-render the demo gifs from docs/assets/vhs/**/*.tape (needs vhs).
+	@for tape in docs/assets/vhs/*/*.tape; do echo ">> vhs $$tape"; vhs "$$tape"; done
+
+##@ Maintenance
+
+.PHONY: tidy
+tidy: ## Tidy go.mod / go.sum.
+	$(GO) mod tidy
+
+.PHONY: install-tools
+install-tools: ## Install the auxiliary dev tools (see notes for golangci-lint).
+	# golangci-lint bundles gofmt, govet, staticcheck, errcheck and more.
+	# Recent releases need a current Go toolchain to build from source, so
+	# install the prebuilt binary instead, e.g.:
+	#   brew install golangci-lint
+	# or see https://golangci-lint.run/welcome/install/
+	$(GO) install golang.org/x/vuln/cmd/govulncheck@latest
 
 .PHONY: clean
 clean: ## Remove build artifacts.
