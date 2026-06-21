@@ -406,6 +406,53 @@ jobs:
           path: depbisect-go*-report.json
           if-no-files-found: ignore
 
+  demo-python:
+    name: Python (uv) CLI smoke test against example repo
+    # uv is installed via setup-uv and a Python interpreter via setup-python.
+    # The example repo is fully offline (committed wheels + a uv.toml with
+    # offline/no-index/find-links), so no packages are downloaded during the
+    # bisection, matching the cargo and go demo jobs.
+    env:
+      # Offline uv must use the setup-python interpreter and never try to
+      # download a managed one, which would fail with no network.
+      UV_PYTHON_PREFERENCE: only-system
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Generate Python example repo
+        run: ./examples/make-demo-python.sh
+      - name: Build CLI
+        run: go build ./cmd/depbisect
+      - name: Bisect the Python example repo
+        run: |
+          ./depbisect run \
+            --repo examples/demo-python/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --report-json depbisect-python-report.json \
+            -- uv run -- python check.py
+      - name: Assert the culprit was identified
+        run: |
+          jq -e '.outcome == "minimal-set-found" and .packageManager == "uv" and (.minimalSet | length) == 1 and .minimalSet[0].name == "breakage"' depbisect-python-report.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: python-demo-reports-${{ matrix.os }}
+          path: depbisect-python*-report.json
+          if-no-files-found: ignore
+
   action-smoke:
     name: Local GitHub Action behavior
     runs-on: ubuntu-latest
