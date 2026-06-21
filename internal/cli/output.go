@@ -21,6 +21,14 @@ const (
 	// status glyph and a space; deriving it from statusWidth keeps the two
 	// output styles from silently drifting apart.
 	modernLabelWidth = statusWidth - 1
+	// modernGutter is the left indent shared by every modern summary body line
+	// (changes, reason, rule, facts). It equals a progress row's glyph+space
+	// prefix, so a fact's value column lands on the same column as a progress
+	// row's message: gutter + label(modernLabelWidth) + space lines up with
+	// glyph + space + label(modernLabelWidth) + space.
+	modernGutter = 2
+	// modernRuleWidth is the length of the divider drawn above the fact column.
+	modernRuleWidth = 44
 )
 
 const (
@@ -78,9 +86,10 @@ type progress struct {
 	activeTrial bool
 
 	// modern lifecycle state for the collapsed ddmin row.
-	ddminStart  time.Time
-	ddminTested int
-	barTick     int
+	modernStarted bool
+	ddminStart    time.Time
+	ddminTested   int
+	barTick       int
 }
 
 func newProgress(w io.Writer, verbose bool, style outputStyle) *progress {
@@ -171,10 +180,22 @@ func (p *progress) clearActiveTrial() {
 	p.activeTrial = false
 }
 
+// modernBegin emits a single blank line before the first modern progress row so
+// the live block is set apart from any preceding terminal output. It is a no-op
+// after the first call.
+func (p *progress) modernBegin() {
+	if p.modernStarted {
+		return
+	}
+	p.modernStarted = true
+	fmt.Fprintln(p.w)
+}
+
 // modernStep handles engine phase markers in the modern style. Most markers
 // are implied by the glyph rows and stay silent; only the bisect completion
 // finalizes the live ddmin row.
 func (p *progress) modernStep(label, msg string) {
+	p.modernBegin()
 	switch label {
 	case "Complete":
 		p.clearActiveTrial()
@@ -192,6 +213,7 @@ func (p *progress) modernStep(label, msg string) {
 // modernTrial collapses the per-trial lifecycle into three rows: baseline,
 // reproduced, and a single live ddmin row that refreshes in place.
 func (p *progress) modernTrial(role string, total int, phase string) {
+	p.modernBegin()
 	switch role {
 	case "baseline-old", "baseline-new":
 		if isLivePhase(phase) {
@@ -202,6 +224,7 @@ func (p *progress) modernTrial(role string, total int, phase string) {
 	default: // candidate, minimality-check
 		if p.ddminStart.IsZero() {
 			p.ddminStart = time.Now()
+			fmt.Fprintln(p.w) // set the ddmin search apart from the baseline pair
 		}
 		if !isLivePhase(phase) {
 			p.ddminTested++
@@ -420,7 +443,7 @@ func printModernSummary(w io.Writer, res *engine.Result, mdPath, jsonPath string
 	}
 
 	if res.OutcomeDetail != "" && res.Outcome != engine.OutcomeMinimalFound {
-		fmt.Fprintf(w, "\n%s\n", paint(ansiGray, sentenceCase(res.OutcomeDetail)))
+		fmt.Fprintf(w, "\n%*s%s\n", modernGutter, "", paint(ansiGray, sentenceCase(res.OutcomeDetail)))
 	}
 
 	facts := make([][2]string, 0, 10)
@@ -456,9 +479,9 @@ func printModernSummary(w io.Writer, res *engine.Result, mdPath, jsonPath string
 	}
 	add("outcome", res.Outcome)
 
-	fmt.Fprintf(w, "\n%s\n", paint(ansiGray, strings.Repeat("─", 44)))
+	fmt.Fprintf(w, "\n%*s%s\n", modernGutter, "", paint(ansiGray, strings.Repeat("─", modernRuleWidth)))
 	for _, f := range facts {
-		fmt.Fprintf(w, "  %s %s\n", paint(ansiGray, fmt.Sprintf("%-9s", f[0])), f[1])
+		fmt.Fprintf(w, "%*s%s %s\n", modernGutter, "", paint(ansiGray, fmt.Sprintf("%-*s", modernLabelWidth, f[0])), f[1])
 	}
 }
 
@@ -468,12 +491,12 @@ func writeModernChanges(w io.Writer, title string, changes []manifest.Change) {
 	if len(changes) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "\n  %s\n", paint(ansiGray, title))
+	fmt.Fprintf(w, "\n%*s%s\n", modernGutter, "", paint(ansiGray, title))
 	for _, change := range changes {
 		text := change.String()
 		text = strings.Replace(text, "->", paint(ansiGray, glyphArrow), 1)
 		text = strings.Replace(text, change.Name, paint(ansiRed, change.Name), 1)
-		fmt.Fprintf(w, "    %s %s\n", paint(ansiRed, glyphFail), text)
+		fmt.Fprintf(w, "%*s%s %s\n", modernGutter*2, "", paint(ansiRed, glyphFail), text)
 	}
 }
 
