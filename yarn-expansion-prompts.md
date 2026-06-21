@@ -23,7 +23,7 @@ gotchas, and a "done-when" bar — no extra context required.
 
 > [!IMPORTANT]
 > - **Strict-fail ddmin predicate** and **lockfile-only diagnostics** are load-bearing — don't loosen them.
-> - **Go 1.20** is the floor (CI matrix tests `1.20.x`); no newer stdlib/lang features.
+> - **Go 1.25** is the floor (go.mod `go 1.25.0`; CI tests `oldstable` + `stable`); no features beyond the floor.
 > - **You handle git.** Claude should *not* add/commit/push — it hands off per-commit with a suggested message.
 > - The ecosystem seam is `manifest.Ecosystem` / `manifest.Parsed` in [`internal/manifest/ecosystem.go`](internal/manifest/ecosystem.go). Add managers there, never by branching on PM at each step.
 

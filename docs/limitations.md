@@ -2,10 +2,10 @@
 
 ## Not supported (DepBisect refuses with a clear error)
 
-- **Workspaces.** npm/yarn `workspaces` in `package.json`, `pnpm-workspace.yaml` repositories, and Cargo `[workspace]` manifests (including virtual manifests).
+- **Workspaces.** npm/yarn `workspaces` in `package.json`, `pnpm-workspace.yaml` repositories, Cargo `[workspace]` manifests (including virtual manifests), and uv `[tool.uv.workspace]` workspaces.
 - **Yarn.** For JavaScript, only npm and pnpm lockfiles are recognized.
 - **Missing JavaScript lockfile.** For npm/pnpm a `package-lock.json` or `pnpm-lock.yaml` must exist at `--to` (or pass `--pm` explicitly). Cargo needs no lockfile — `Cargo.lock` is optional and only enriches diagnostics.
-- **Ambiguous detection.** If both a `package.json` and a `Cargo.toml` exist, or both JavaScript lockfiles exist, choose with `--pm npm|pnpm|cargo`.
+- **Ambiguous detection.** If multiple manifests exist (for example a `package.json` and a `Cargo.toml`), or both JavaScript lockfiles exist, choose with `--pm npm|pnpm|cargo|go|uv`.
 
 ## Supported but with caveats (reported as diagnostics, never silent)
 
@@ -32,6 +32,7 @@
 - **Cargo without a lockfile.** `Cargo.lock` is optional; without it, resolved-version annotations and lockfile-only diagnostics are unavailable, but bisection still works (candidates resolve via `cargo fetch`).
 - **Cargo non-versioned dependencies.** `git`, `path`, and workspace-inherited (`foo.workspace = true`) dependencies carry no version requirement and are not bisected.
 - **Cargo candidate formatting.** Candidate `Cargo.toml` files are re-serialized, so comments and original formatting are not preserved (visible only under `--keep-worktrees`). Reverting a *removed* table-form dependency restores its version but not sibling keys such as `features`.
+- **Python beyond uv.** Only uv projects are recognized, detected by a `uv.lock` beside `pyproject.toml`; Poetry, PDM, and other resolvers are not (pass `--pm uv` only for uv projects). Only the PEP 621 `[project.dependencies]` array is bisected — optional-dependencies (extras) and dependency groups are not — and direct-reference requirements (`name @ url`) carry no bisectable version, so they are skipped.
 
 ## Interpreting non-zero exits
 

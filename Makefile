@@ -140,6 +140,7 @@ demo-go: build ## Go: simple + complex + jobs + swarm demos (offline file:// pro
 		$(BINARY) run --repo examples/demo-go-swarm/app --base HEAD~1 --runs 3 --jobs 12 -- $(GO) test ./...
 
 .PHONY: demo-python
+demo-python: export UV_PYTHON_PREFERENCE = only-system
 demo-python: build ## Python (uv): bisect the offline example repo (culprit: breakage).
 	./examples/make-demo-python.sh
 	$(BINARY) run --repo examples/demo-python/app --base HEAD~1 --runs 3 -- uv run -- python check.py

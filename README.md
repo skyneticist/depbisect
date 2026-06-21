@@ -13,14 +13,14 @@
 
 You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 
-`git bisect` walks *commits* — it can't help when the breakage lives inside a single dependency-update commit. DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies declared in your manifest (`package.json`, `Cargo.toml`, or `go.mod`) between two revisions, then applies [delta debugging](https://www.cs.purdue.edu/homes/xyzhang/fall07/Papers/delta-debugging.pdf) to isolate the exact subset responsible — all inside a throwaway worktree that never touches your checkout.
+`git bisect` walks *commits* — it can't help when the breakage lives inside a single dependency-update commit. DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies declared in your manifest (`package.json`, `Cargo.toml`, `go.mod`, or `pyproject.toml`) between two revisions, then applies [delta debugging](https://www.cs.purdue.edu/homes/xyzhang/fall07/Papers/delta-debugging.pdf) to isolate the exact subset responsible — all inside a throwaway worktree that never touches your checkout.
 
 ![DepBisect narrowing 12 dependency changes down to the 5-package set that broke the build](docs/demo.gif)
 
 ## Features
 
 - **Provably minimal.** Runs Zeller's `ddmin` delta-debugging algorithm plus a one-by-one removal pass, so the answer is *1-minimal* — removing any single dependency from the set makes the failure stop reproducing — not merely "some failing subset."
-- **Multi-ecosystem.** JavaScript (`npm`, `pnpm`), Rust (`cargo`), and Go (`go` modules), auto-detected from the manifest or selected with `--pm`. The same engine and 1-minimality proof back every ecosystem.
+- **Multi-ecosystem.** JavaScript (`npm`, `pnpm`), Rust (`cargo`), Go (`go` modules), and Python (`uv`), auto-detected from the manifest or selected with `--pm`. The same engine and 1-minimality proof back every ecosystem.
 - **Never touches your checkout.** Every install happens in a DepBisect-owned temporary git worktree. `git reset --hard` and `git clean -ffdx` run *only* there, never in your working tree.
 - **Flaky-test aware.** `--runs N` repeats each check; a candidate counts as failing only if *all* N runs fail. Mixed pass/fail results are reported as diagnostics, never silently guessed.
 - **Resumable.** Completed trials are checkpointed to disk. Interrupt with Ctrl-C, then pick up exactly where you left off with `--resume`.
@@ -44,7 +44,7 @@ You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 ## Install
 
 DepBisect ships as a single static binary — pick whichever method fits. You'll
-also need `git` and your project's package manager (`npm`, `pnpm`, `cargo`, or `go`) on your `PATH`.
+also need `git` and your project's package manager (`npm`, `pnpm`, `cargo`, `go`, or `uv`) on your `PATH`.
 
 **npm / pnpm** — no Go toolchain required:
 
@@ -121,6 +121,12 @@ depbisect run --base origin/main --runs 3 -- go test ./...
 The Go demos run fully offline via a generated `file://` module proxy; here DepBisect narrows twelve Go module bumps to the five-module set that breaks the build:
 
 ![DepBisect narrowing twelve Go module bumps to the five-module culprit set that breaks the build](docs/go-complex.gif)
+
+**Working in Python?** Same flow — auto-detected from a uv project (`pyproject.toml` with a `uv.lock`):
+
+```sh
+depbisect run --base origin/main --runs 3 -- uv run -- pytest
+```
 
 **Preview before you commit to a run.** `--dry-run` resolves `--base..HEAD`, diffs the
 declared dependencies, and prints the plan — installing nothing and never running your
@@ -211,8 +217,9 @@ DepBisect is built to be safe to point at a real repository:
 | pnpm    | `package.json` | `pnpm-lock.yaml` (v5 / v6 / v9)   |
 | cargo   | `Cargo.toml`   | `Cargo.lock`                      |
 | go      | `go.mod`       | `go.sum`                          |
+| uv      | `pyproject.toml` | `uv.lock`                       |
 
-Workspaces (npm/pnpm and Go `go.work`) and yarn are not supported yet; DepBisect exits with
+Workspaces (npm/pnpm, Go `go.work`, and uv `[tool.uv.workspace]`) and yarn are not supported yet; DepBisect exits with
 a clear error rather than guessing.
 
 ## Configuration
@@ -228,7 +235,7 @@ Common flags — run `depbisect help` for the complete list.
 | `--dry-run`           | Show detected changes and plan, then exit without bisecting     |
 | `--resume`            | Resume completed trials from the checkpoint                     |
 | `--quiet` / `--verbose` | Print only the final result / stream all subprocess output    |
-| `--pm <npm\|pnpm\|cargo\|go>` | Force a package manager (default: auto-detected)         |
+| `--pm <npm\|pnpm\|cargo\|go\|uv>` | Force a package manager (default: auto-detected)         |
 | `--style <name>`      | Output style: `modern` (default) or `classic`; also set via `DEPBISECT_STYLE` |
 
 **`--jobs` in action.** Candidate subsets are independent, so DepBisect evaluates them
@@ -318,8 +325,8 @@ CLI release.
 
 ## Limitations
 
-- Only **direct** dependency changes in your manifest (`package.json`, `Cargo.toml`, or
-  `go.mod`) are bisected. Lockfile-only changes (same spec, different resolution) are
+- Only **direct** dependency changes in your manifest (`package.json`, `Cargo.toml`, `go.mod`,
+  or `pyproject.toml`) are bisected. Lockfile-only changes (same spec, different resolution) are
   detected and reported, not bisected.
 - Installing candidates needs **registry or module access** and uses your package manager's
   normal configuration.
