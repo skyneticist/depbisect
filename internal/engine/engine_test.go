@@ -162,6 +162,19 @@ func readDeps(t testing.TB, dir string) map[string]string {
 		}
 		return deps
 	}
+	if data, err := os.ReadFile(filepath.Join(dir, "pyproject.toml")); err == nil {
+		p, err := manifest.ParsePyproject(data)
+		if err != nil {
+			t.Fatalf("parse candidate pyproject.toml: %v", err)
+		}
+		deps := map[string]string{}
+		for _, sec := range p.Sections {
+			for k, v := range sec {
+				deps[k] = v
+			}
+		}
+		return deps
+	}
 	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
 	if err != nil {
 		t.Fatalf("read candidate manifest: %v", err)
@@ -553,6 +566,66 @@ func TestRunFindsSingleCulpritGo(t *testing.T) {
 	}
 	if res.Minimal[0].OldResolved != "v1.3.0" || res.Minimal[0].NewResolved != "v1.4.0" {
 		t.Errorf("resolved versions not annotated from go.sum: %+v", res.Minimal[0])
+	}
+}
+
+const uvLockOld = `version = 1
+[[package]]
+name = "alpha"
+version = "1.0.0"
+[[package]]
+name = "beta"
+version = "3.0.0"
+[[package]]
+name = "gamma"
+version = "5.0.0"
+`
+const uvLockNew = `version = 1
+[[package]]
+name = "alpha"
+version = "1.1.0"
+[[package]]
+name = "beta"
+version = "3.2.0"
+[[package]]
+name = "gamma"
+version = "5.5.0"
+`
+
+func threeChangePythonRepo() *fakeGit {
+	const basePy = "[project]\nname = \"app\"\nrequires-python = \">=3.9\"\ndependencies = [\"alpha>=1.0.0\", \"beta>=3.0.0\", \"gamma>=5.0.0\"]\n"
+	const headPy = "[project]\nname = \"app\"\nrequires-python = \">=3.9\"\ndependencies = [\"alpha>=1.1.0\", \"beta>=3.2.0\", \"gamma>=5.5.0\"]\n"
+	return &fakeGit{
+		revs: map[string]string{"base": "sha-base", "HEAD": "sha-head"},
+		files: map[string]map[string]string{
+			"sha-base": {"pyproject.toml": basePy, "uv.lock": uvLockOld},
+			"sha-head": {"pyproject.toml": headPy, "uv.lock": uvLockNew},
+		},
+	}
+}
+
+// TestRunFindsSingleCulpritPython exercises the whole engine over a Python repo:
+// pyproject.toml auto-detection (via uv.lock), [project.dependencies] diff/render,
+// and uv.lock annotation.
+func TestRunFindsSingleCulpritPython(t *testing.T) {
+	env := newEnv(t, threeChangePythonRepo(), func(deps map[string]string) bool {
+		return deps["beta"] == ">=3.2.0"
+	}, 3)
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeMinimalFound {
+		t.Fatalf("outcome = %q, diagnostics %v", res.Outcome, res.Diagnostics)
+	}
+	if res.PackageManager != "uv" {
+		t.Errorf("pm = %q, want uv", res.PackageManager)
+	}
+	if got := minimalNames(res); ids(got) != "beta" {
+		t.Errorf("minimal = %v, want [beta]", got)
+	}
+	if res.Minimal[0].OldResolved != "3.0.0" || res.Minimal[0].NewResolved != "3.2.0" {
+		t.Errorf("resolved versions not annotated from uv.lock: %+v", res.Minimal[0])
 	}
 }
 

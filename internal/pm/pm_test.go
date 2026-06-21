@@ -27,6 +27,7 @@ func TestDetect(t *testing.T) {
 		{name: "neither with override", override: "npm", want: NPM},
 		{name: "cargo override", override: "cargo", want: CARGO},
 		{name: "go override", override: "go", want: GO},
+		{name: "uv override", override: "uv", want: UV},
 		{name: "bad override", override: "yarn", wantErrPart: "yarn"},
 	}
 	for _, tc := range cases {
@@ -50,14 +51,16 @@ func TestDetect(t *testing.T) {
 
 func TestLockfileNames(t *testing.T) {
 	if NPM.LockfileName() != "package-lock.json" || PNPM.LockfileName() != "pnpm-lock.yaml" ||
-		CARGO.LockfileName() != "Cargo.lock" || GO.LockfileName() != "go.sum" {
+		CARGO.LockfileName() != "Cargo.lock" || GO.LockfileName() != "go.sum" ||
+		UV.LockfileName() != "uv.lock" {
 		t.Error("wrong lockfile names")
 	}
 }
 
 func TestManifestNames(t *testing.T) {
 	if NPM.ManifestName() != "package.json" || PNPM.ManifestName() != "package.json" ||
-		CARGO.ManifestName() != "Cargo.toml" || GO.ManifestName() != "go.mod" {
+		CARGO.ManifestName() != "Cargo.toml" || GO.ManifestName() != "go.mod" ||
+		UV.ManifestName() != "pyproject.toml" {
 		t.Error("wrong manifest names")
 	}
 }
@@ -125,6 +128,19 @@ func TestInstallInvocation(t *testing.T) {
 	// download` populate go.sum (and reconcile go.mod) for them.
 	if !reflect.DeepEqual(gc.ExtraEnv, []string{"GOFLAGS=-mod=mod"}) {
 		t.Errorf("go install env = %v, want [GOFLAGS=-mod=mod]", gc.ExtraEnv)
+	}
+
+	fakeUv := execx.NewFake()
+	instUv := Installer{Runner: fakeUv, Manager: UV}
+	if _, err := instUv.Install(context.Background(), "/u", nil); err != nil {
+		t.Fatal(err)
+	}
+	uc := fakeUv.Calls()[0]
+	if uc.Name != "uv" || !reflect.DeepEqual(uc.Args, []string{"lock"}) {
+		t.Errorf("uv install cmd = %+v, want uv lock", uc)
+	}
+	if !uc.AllowTrustedBatch {
+		t.Error("uv invocation must allow its fixed arguments through Windows batch shims")
 	}
 }
 
@@ -238,5 +254,22 @@ func TestVersionGo(t *testing.T) {
 	}
 	if call := fake.Calls()[0]; !reflect.DeepEqual(call.Args, []string{"version"}) {
 		t.Errorf("version args = %v, want [version]", call.Args)
+	}
+}
+
+func TestVersionUv(t *testing.T) {
+	// `uv --version` prints "uv x.y.z"; the leading "uv" must not be doubled.
+	fake := execx.NewFake()
+	fake.Default.Result = execx.Result{Stdout: []byte("uv 0.5.11 (abc1234 2024-12-01)\n")}
+	inst := Installer{Runner: fake, Manager: UV, LookPath: found}
+	id, err := inst.Version(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "uv 0.5.11 (abc1234 2024-12-01)" {
+		t.Errorf("identity = %q, want unprefixed uv version", id)
+	}
+	if call := fake.Calls()[0]; !reflect.DeepEqual(call.Args, []string{"--version"}) {
+		t.Errorf("version args = %v, want [--version]", call.Args)
 	}
 }

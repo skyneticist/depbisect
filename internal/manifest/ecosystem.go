@@ -33,8 +33,8 @@ type Ecosystem interface {
 }
 
 // EcosystemFor returns the Ecosystem for a package manager. The manager keys
-// match the string values of pm.Manager ("npm", "pnpm", "cargo"); keying on
-// the bare string keeps the manifest package decoupled from package pm.
+// match the string values of pm.Manager ("npm", "pnpm", "cargo", "go", "uv");
+// keying on the bare string keeps the manifest package decoupled from package pm.
 func EcosystemFor(manager string) (Ecosystem, error) {
 	switch manager {
 	case "npm":
@@ -45,6 +45,8 @@ func EcosystemFor(manager string) (Ecosystem, error) {
 		return cargoEcosystem{}, nil
 	case "go":
 		return goEcosystem{}, nil
+	case "uv":
+		return pyEcosystem{}, nil
 	default:
 		return nil, fmt.Errorf("no manifest handling for package manager %q", manager)
 	}
@@ -132,4 +134,29 @@ func (goEcosystem) Render(to Parsed, changes []Change, applied map[string]bool) 
 
 func (goEcosystem) LockfileOnly(old, new Parsed, oldR, newR Resolved) []LockfileChange {
 	return LockfileOnlyGo(old.(*GoMod), new.(*GoMod), oldR, newR)
+}
+
+// pyEcosystem handles pyproject.toml manifests for the uv package manager.
+type pyEcosystem struct{}
+
+func (pyEcosystem) Parse(data []byte) (Parsed, error) {
+	p, err := ParsePyproject(data)
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (pyEcosystem) ParseLock(data []byte) (Resolved, error) { return ParseUvLock(data) }
+
+func (pyEcosystem) Diff(old, new Parsed) []Change {
+	return DiffPyproject(old.(*PyProject), new.(*PyProject))
+}
+
+func (pyEcosystem) Render(to Parsed, changes []Change, applied map[string]bool) ([]byte, error) {
+	return RenderPyproject(to.(*PyProject), changes, applied)
+}
+
+func (pyEcosystem) LockfileOnly(old, new Parsed, oldR, newR Resolved) []LockfileChange {
+	return LockfileOnlyPyproject(old.(*PyProject), new.(*PyProject), oldR, newR)
 }

@@ -11,6 +11,7 @@ func TestEcosystemForDispatch(t *testing.T) {
 		{"pnpm", basePkg},
 		{"cargo", baseCargo},
 		{"go", baseGoMod},
+		{"uv", basePyproject},
 	}
 	for _, tc := range cases {
 		t.Run(tc.manager, func(t *testing.T) {
@@ -63,6 +64,15 @@ func TestEcosystemDiffRenderRoundTrip(t *testing.T) {
 	} else if _, err := gomod.Render(newG, changes, map[string]bool{}); err != nil {
 		t.Fatalf("Go render: %v", err)
 	}
+
+	uv, _ := EcosystemFor("uv")
+	oldU, _ := uv.Parse([]byte(basePyproject))
+	newU, _ := uv.Parse([]byte(newPyproject))
+	if changes := uv.Diff(oldU, newU); len(changes) == 0 {
+		t.Fatal("expected uv changes")
+	} else if _, err := uv.Render(newU, changes, map[string]bool{}); err != nil {
+		t.Fatalf("uv render: %v", err)
+	}
 }
 
 func TestLockfileOnlyCargo(t *testing.T) {
@@ -87,6 +97,7 @@ func TestEcosystemParseLock(t *testing.T) {
 		{"pnpm", "lockfileVersion: '6.0'\ndependencies:\n  a:\n    specifier: ^1\n    version: 1.2.3\n", "a", "1.2.3"},
 		{"cargo", "[[package]]\nname = \"a\"\nversion = \"1.2.3\"\n", "a", "1.2.3"},
 		{"go", "github.com/a/b v1.2.3 h1:xxx\ngithub.com/a/b v1.2.3/go.mod h1:yyy\n", "github.com/a/b", "v1.2.3"},
+		{"uv", "[[package]]\nname = \"a\"\nversion = \"1.2.3\"\n", "a", "1.2.3"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.manager, func(t *testing.T) {
@@ -128,10 +139,17 @@ func TestEcosystemLockfileOnly(t *testing.T) {
 	if lo := gomod.LockfileOnly(gOld, gNew, Resolved{"github.com/alpha/one": "v1.0.0"}, Resolved{"github.com/alpha/one": "v1.5.0"}); len(lo) != 1 || lo[0].Name != "github.com/alpha/one" {
 		t.Errorf("go LockfileOnly = %+v, want [github.com/alpha/one]", lo)
 	}
+
+	uv, _ := EcosystemFor("uv")
+	uOld, _ := uv.Parse([]byte(basePyproject))
+	uNew, _ := uv.Parse([]byte(basePyproject))
+	if lo := uv.LockfileOnly(uOld, uNew, Resolved{"requests": "2.28.0"}, Resolved{"requests": "2.31.0"}); len(lo) != 1 || lo[0].Name != "requests" {
+		t.Errorf("uv LockfileOnly = %+v, want [requests]", lo)
+	}
 }
 
 func TestEcosystemParseError(t *testing.T) {
-	cases := map[string]string{"npm": "{not json", "cargo": "not = = toml [[", "go": "module x\nrequire (\n"}
+	cases := map[string]string{"npm": "{not json", "cargo": "not = = toml [[", "go": "module x\nrequire (\n", "uv": "[project"}
 	for manager, bad := range cases {
 		eco, _ := EcosystemFor(manager)
 		if _, err := eco.Parse([]byte(bad)); err == nil {
