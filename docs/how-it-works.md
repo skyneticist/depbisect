@@ -3,17 +3,17 @@
 ## Pipeline
 
 1. **Resolve revisions.** `--base` and `--to` (default `HEAD`) are resolved to commits. Uncommitted changes are ignored (and warned about if they touch `package.json` or the lockfile).
-2. **Diff manifests.** The manifest (`package.json` or `Cargo.toml`) is read at both revisions with a structured parser. Direct dependency changes across the manifest's dependency sections are classified as updated, added, or removed.
-3. **Read lockfiles.** `package-lock.json` (v1–v3), `pnpm-lock.yaml` (v5/v6/v9), or `Cargo.lock` supplies exact resolved versions for display, and exposes *lockfile-only* changes — dependencies whose spec is unchanged but whose resolution moved. These cannot be bisected (see below) and are reported as diagnostics.
+2. **Diff manifests.** The manifest (`package.json`, `Cargo.toml`, `go.mod`, or `pyproject.toml`) is read at both revisions with a structured parser. Direct dependency changes across the manifest's dependency sections are classified as updated, added, or removed.
+3. **Read lockfiles.** `package-lock.json` (v1–v3), `pnpm-lock.yaml` (v5/v6/v9), `Cargo.lock`, `go.sum`, or `uv.lock` supplies exact resolved versions for display, and exposes *lockfile-only* changes — dependencies whose spec is unchanged but whose resolution moved. These cannot be bisected (see below) and are reported as diagnostics.
 4. **Create an isolated worktree.** `git worktree add --detach` checks out `--to` in a private temporary directory. The user's checkout is never touched.
 5. **Verify baselines.** With all updates reverted, the command must pass every run; with all updates applied, it must fail every run. Any other combination ends the run with a specific outcome (`fails-without-updates`, `not-reproduced`, or `inconclusive` for flaky behavior) instead of producing a bogus answer.
-6. **Delta-debug (ddmin).** Before every uncached trial, the owned worktree is reset to `--to` and all untracked and ignored files are removed. Candidate subsets are then applied by rewriting the manifest (structured edit, never regex), installing with npm/pnpm/cargo, and re-running the command.
+6. **Delta-debug (ddmin).** Before every uncached trial, the owned worktree is reset to `--to` and all untracked and ignored files are removed. Candidate subsets are then applied by rewriting the manifest (structured edit, never regex), installing with npm/pnpm/cargo/go/uv, and re-running the command.
 7. **Certify minimality.** Every one-change removal from the returned set is tested. The result is called 1-minimal only when all of those configurations resolve and pass. Otherwise the outcome is `inconclusive` with a best-known failing set.
 8. **Report.** Results go to the terminal, `depbisect-report.md`, and a schema-stable `depbisect-report.json`. Each completed trial records preparation, installation, verification, and total wall time; the run summary also records cleanup and stamps completion after cleanup finishes.
 
 ## Candidate semantics
 
-A candidate is "the `--to` source tree, with dependency specs reverted to their `--base` values for every change *not* in the subset". Reverting an added dependency removes it; reverting a removed one restores it. Installs run `npm install` / `pnpm install --no-frozen-lockfile` / `cargo fetch`, so the package manager reconciles the lockfile inside the worktree only.
+A candidate is "the `--to` source tree, with dependency specs reverted to their `--base` values for every change *not* in the subset". Reverting an added dependency removes it; reverting a removed one restores it. Installs run `npm install` / `pnpm install --no-frozen-lockfile` / `cargo fetch` / `go mod download` / `uv lock`, so the package manager reconciles the lockfile inside the worktree only.
 
 ## Flakiness handling
 

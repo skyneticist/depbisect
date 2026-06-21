@@ -17,7 +17,14 @@ All notable changes to this project are documented here. The format follows
   resolved-version annotations from `go.sum`. Auto-detected from `go.mod`, or
   select with `--pm go`; indirect and `replace`d requires are skipped, and
   `go.work` workspaces are unsupported. DepBisect is now multi-ecosystem
-  (npm, pnpm, cargo, go) behind one engine.
+  (npm, pnpm, cargo, go, uv) behind one engine.
+- Python (uv) support: bisect direct `pyproject.toml` `[project.dependencies]`
+  (PEP 621) changes, with `uv lock` candidate installs and resolved-version
+  annotations from `uv.lock`. Auto-detected from a `pyproject.toml` with a
+  `uv.lock`, or select with `--pm uv`; verify with `uv run -- <cmd>`. Only the
+  `[project.dependencies]` array is bisected (optional-dependencies and
+  dependency groups are not), and other Python tools (Poetry, PDM) are not yet
+  recognized.
 - `--jobs` / `-j` to evaluate candidate trials in parallel, each in its own
   isolated worktree. The minimized set is identical at any job count; the
   verification command must be safe to run concurrently. Each ddmin
