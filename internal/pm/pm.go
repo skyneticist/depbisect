@@ -1,5 +1,5 @@
 // Package pm abstracts the supported package managers across ecosystems:
-// npm and pnpm for JavaScript, cargo for Rust, and go for Go.
+// npm and pnpm for JavaScript, cargo for Rust, go for Go, and uv for Python.
 package pm
 
 import (
@@ -20,6 +20,7 @@ const (
 	PNPM  Manager = "pnpm"
 	CARGO Manager = "cargo"
 	GO    Manager = "go"
+	UV    Manager = "uv"
 )
 
 // Detect chooses the package manager from lockfile presence at the target
@@ -37,8 +38,10 @@ func Detect(hasPackageLock, hasPnpmLock bool, override string) (Manager, error) 
 		return CARGO, nil
 	case string(GO):
 		return GO, nil
+	case string(UV):
+		return UV, nil
 	default:
-		return "", fmt.Errorf("unsupported package manager %q (supported: npm, pnpm, cargo, go)", override)
+		return "", fmt.Errorf("unsupported package manager %q (supported: npm, pnpm, cargo, go, uv)", override)
 	}
 	switch {
 	case hasPackageLock && hasPnpmLock:
@@ -62,6 +65,8 @@ func (m Manager) LockfileName() string {
 		return "Cargo.lock"
 	case GO:
 		return "go.sum"
+	case UV:
+		return "uv.lock"
 	default:
 		return "package-lock.json"
 	}
@@ -75,6 +80,8 @@ func (m Manager) ManifestName() string {
 		return "Cargo.toml"
 	case GO:
 		return "go.mod"
+	case UV:
+		return "pyproject.toml"
 	default:
 		return "package.json"
 	}
@@ -99,6 +106,14 @@ func (m Manager) installArgs() []string {
 		// candidate go.mod and records their checksums in go.sum, without
 		// compiling. Build and test failures are left to the verify command.
 		return []string{"mod", "download"}
+	case UV:
+		// `uv lock` re-resolves uv.lock to satisfy the candidate pyproject.toml
+		// without creating a virtualenv or installing anything; a revert that
+		// cannot be satisfied surfaces here as an install failure. Building the
+		// environment and running tests is left to the verification command,
+		// which should invoke `uv run` (e.g. `uv run -- pytest`) so it executes
+		// against the freshly resolved lock.
+		return []string{"lock"}
 	default:
 		return []string{"install", "--no-audit", "--no-fund", "--loglevel=error"}
 	}

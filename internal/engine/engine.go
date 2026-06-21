@@ -687,8 +687,8 @@ func (e *Engine) readManifest(ctx context.Context, eco manifest.Ecosystem, name,
 
 // detectManager chooses the package manager. A non-empty override wins;
 // otherwise the manifest present at the target revision selects the ecosystem
-// (Cargo.toml -> cargo, go.mod -> go, package.json -> npm/pnpm by lockfile).
-// More than one manifest is ambiguous and requires --pm.
+// (Cargo.toml -> cargo, go.mod -> go, pyproject.toml -> uv, package.json ->
+// npm/pnpm by lockfile). More than one manifest is ambiguous and requires --pm.
 func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.Manager, error) {
 	if override != "" {
 		return pm.Detect(false, false, override)
@@ -705,6 +705,10 @@ func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.
 	if err != nil {
 		return "", err
 	}
+	hasPyproject, err := e.Git.FileExists(ctx, toSHA, pm.UV.ManifestName())
+	if err != nil {
+		return "", err
+	}
 	var found []string
 	if hasPackageJSON {
 		found = append(found, "package.json")
@@ -715,6 +719,9 @@ func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.
 	if hasGoMod {
 		found = append(found, "go.mod")
 	}
+	if hasPyproject {
+		found = append(found, "pyproject.toml")
+	}
 	if len(found) > 1 {
 		return "", fmt.Errorf("multiple manifests found (%s); choose one with --pm", strings.Join(found, ", "))
 	}
@@ -723,6 +730,18 @@ func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.
 		return pm.CARGO, nil
 	case hasGoMod:
 		return pm.GO, nil
+	case hasPyproject:
+		// pyproject.toml is shared by every Python tool; only uv is supported so
+		// far, distinguished by its uv.lock. Other tools (Poetry, PDM) need --pm
+		// once they are added.
+		hasUvLock, err := e.Git.FileExists(ctx, toSHA, pm.UV.LockfileName())
+		if err != nil {
+			return "", err
+		}
+		if !hasUvLock {
+			return "", fmt.Errorf("pyproject.toml found but no uv.lock at %s; only uv is supported for Python so far (pass --pm uv if this is a uv project, or generate uv.lock with `uv lock`)", shortSHA(toSHA))
+		}
+		return pm.UV, nil
 	case hasPackageJSON:
 		hasNpmLock, err := e.Git.FileExists(ctx, toSHA, pm.NPM.LockfileName())
 		if err != nil {
@@ -734,7 +753,7 @@ func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.
 		}
 		return pm.Detect(hasNpmLock, hasPnpmLock, "")
 	default:
-		return "", fmt.Errorf("no supported manifest found at %s (package.json, Cargo.toml, or go.mod)", shortSHA(toSHA))
+		return "", fmt.Errorf("no supported manifest found at %s (package.json, Cargo.toml, go.mod, or pyproject.toml)", shortSHA(toSHA))
 	}
 }
 
@@ -765,7 +784,7 @@ func (e *Engine) readLockfile(ctx context.Context, eco manifest.Ecosystem, name,
 func (e *Engine) warnDirty(ctx context.Context, manager pm.Manager, res *Result) {
 	var paths []string
 	switch manager {
-	case pm.CARGO, pm.GO:
+	case pm.CARGO, pm.GO, pm.UV:
 		paths = []string{manager.ManifestName(), manager.LockfileName()}
 	default:
 		paths = []string{pm.NPM.ManifestName(), pm.NPM.LockfileName(), pm.PNPM.LockfileName()}

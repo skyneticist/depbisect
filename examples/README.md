@@ -248,3 +248,27 @@ command when it finishes:
 ![DepBisect isolating the twelve replica-* modules of the Go swarm demo](../docs/go-swarm.gif)
 
 Re-run any script to reset its generated repository.
+
+## Python (uv) demo
+
+`make-demo-python.sh` generates a Python equivalent at `examples/demo-python/`.
+It needs `git`, `uv`, `python3`, and `zip` but **no network**: each package
+version is served from committed wheels in `wheels/`, and a `uv.toml` with
+`offline = true`, `no-index = true`, and `find-links = ["wheels"]` keeps uv off
+PyPI, so both resolution and installation run entirely offline.
+
+The demo bumps two packages; only `breakage 1.0.0 -> 2.0.0` breaks the check
+(`healthy()` starts returning `False`). The verification command runs the check
+through `uv run`, which installs the resolved lock into a throwaway virtualenv:
+
+```sh
+./examples/make-demo-python.sh
+go build ./cmd/depbisect
+./depbisect run --repo examples/demo-python/app --base HEAD~1 --runs 3 -- uv run -- python check.py
+```
+
+Expected result: minimal failing set = `breakage 1.0.0 -> 2.0.0`.
+
+DepBisect bisects the PEP 621 `[project.dependencies]` array in `pyproject.toml`
+and reads resolved versions from `uv.lock`. Re-run the script any time to reset
+the generated repository.

@@ -39,9 +39,9 @@ Usage:
   depbisect help
 
 Finds the smallest set of direct dependency updates (package.json,
-Cargo.toml, or go.mod) between --base and --to that makes <command> fail,
-using delta debugging in an isolated git worktree. Your checkout is never
-modified.
+Cargo.toml, go.mod, or pyproject.toml) between --base and --to that makes
+<command> fail, using delta debugging in an isolated git worktree. Your
+checkout is never modified.
 
 The verification command after -- is executed directly with its arguments
 preserved exactly; no shell is involved. Wrap it yourself if you need shell
@@ -62,8 +62,9 @@ Flags for run:
                         timeout per dependency install (default none)
   --overall-timeout <dur>
                         timeout for the complete bisection (default none)
-  --pm <npm|pnpm|cargo|go>
-                        package manager (default: auto-detected)
+  --pm <npm|pnpm|cargo|go|uv>
+                        package manager (default: auto-detected). uv (Python)
+                        bisects pyproject.toml; verify with: uv run -- <cmd>
   --report-md <path>    Markdown report path (default "depbisect-report.md")
   --report-json <path>  JSON report path (default "depbisect-report.json")
   --no-reports          write no report files

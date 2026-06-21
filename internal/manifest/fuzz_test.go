@@ -134,3 +134,58 @@ func FuzzParseCargoLock(f *testing.F) {
 		}
 	})
 }
+
+// FuzzParsePyproject checks that parsing never panics and that any pyproject.toml
+// which parses cleanly round-trips: rendering it with no changes and re-parsing
+// must yield an identical set of dependency declarations. This exercises the
+// hand-rolled PEP 508 requirement splitter against arbitrary input.
+func FuzzParsePyproject(f *testing.F) {
+	f.Add([]byte("[project]\nname = \"demo\"\ndependencies = [\"a>=1.0\"]\n"))
+	f.Add([]byte("[project]\ndependencies = [\"Flask[async]>=2; python_version >= '3.8'\"]\n"))
+	f.Add([]byte("[project]\ndependencies = [\"pkg @ https://example.com/p.whl\", \"bare\"]\n"))
+	f.Add([]byte("[tool.uv.workspace]\nmembers = [\"x/*\"]\n"))
+	f.Add([]byte("[project]\ndependencies = [\"==1.0\", \"zope.interface\"]\n"))
+	f.Add([]byte("not toml ["))
+	f.Add([]byte(""))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		p, err := ParsePyproject(data)
+		if err != nil {
+			return // rejecting malformed input is fine; it must just not panic.
+		}
+		rendered, err := RenderPyproject(p, nil, nil)
+		if err != nil {
+			t.Fatalf("RenderPyproject after successful parse: %v\ninput:\n%s", err, data)
+		}
+		p2, err := ParsePyproject(rendered)
+		if err != nil {
+			t.Fatalf("re-parse of rendered manifest: %v\nrendered:\n%s", err, rendered)
+		}
+		if diff := DiffPyproject(p, p2); len(diff) != 0 {
+			t.Fatalf("round-trip changed dependencies: %v\nrendered:\n%s", diff, rendered)
+		}
+	})
+}
+
+// FuzzParseUvLock checks that uv.lock parsing never panics and is deterministic:
+// parsing identical bytes twice yields an identical result.
+func FuzzParseUvLock(f *testing.F) {
+	f.Add([]byte("version = 1\n[[package]]\nname = \"a\"\nversion = \"1.0.0\"\n"))
+	f.Add([]byte("[[package]]\nname = \"A\"\nversion = \"1.0.0\"\n[[package]]\nname = \"a\"\nversion = \"2.0.0\"\n"))
+	f.Add([]byte("version = 1\n"))
+	f.Add([]byte("not toml ["))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		first, err := ParseUvLock(data)
+		if err != nil {
+			return
+		}
+		second, err := ParseUvLock(data)
+		if err != nil {
+			t.Fatalf("non-deterministic error on identical input: %v", err)
+		}
+		if !reflect.DeepEqual(first, second) {
+			t.Fatalf("non-deterministic parse: %v vs %v", first, second)
+		}
+	})
+}

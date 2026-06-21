@@ -1,4 +1,4 @@
-// Package manifest understands package.json, Cargo.toml, and go.mod manifests and their lockfiles.
+// Package manifest understands package.json, Cargo.toml, go.mod, and pyproject.toml manifests and their lockfiles.
 //
 // It provides structured parsing, diffing of direct dependency declarations
 // between two manifests, and rendering of candidate manifests in which an
