@@ -3,7 +3,7 @@
 # Cross-compile the static binary for the requested target platform. Running the
 # build stage on the native BUILDPLATFORM (and letting Go cross-compile via
 # TARGETOS/TARGETARCH) keeps multi-arch builds fast — no emulation for the build.
-FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=docker
