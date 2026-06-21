@@ -6,7 +6,7 @@
 [![CI](https://github.com/skyneticist/depbisect/actions/workflows/ci.yml/badge.svg)](https://github.com/skyneticist/depbisect/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/skyneticist/depbisect)](https://goreportcard.com/report/github.com/skyneticist/depbisect)
 [![Latest release](https://img.shields.io/github/v/release/skyneticist/depbisect?sort=semver)](https://github.com/skyneticist/depbisect/releases)
-[![Go 1.20+](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
+[![Go 1.25+](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 
@@ -78,7 +78,7 @@ curl -fsSL https://raw.githubusercontent.com/skyneticist/depbisect/main/install.
 shasum -c --ignore-missing checksums.txt
 ```
 
-**Go** (1.20+):
+**Go** (1.25+):
 
 ```sh
 go install github.com/skyneticist/depbisect/cmd/depbisect@latest
