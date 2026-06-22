@@ -13,6 +13,14 @@ COVER_MIN ?= 80.0
 
 .DEFAULT_GOAL := help
 
+# need — guard a recipe that shells out to an optional tool. Prints an
+# actionable install hint instead of make's cryptic "<tool>: No such file or
+# directory" when the tool is absent. Usage as the first line of a recipe:
+#   $(call need,goreleaser,brew install goreleaser)
+define need
+@command -v $(1) >/dev/null 2>&1 || { printf '\n\033[1;31m%s not found\033[0m — needed by make %s\n  install: %s\n\n' '$(1)' '$@' '$(2)'; exit 1; }
+endef
+
 ##@ General
 
 .PHONY: help
@@ -66,10 +74,12 @@ vet: ## Run go vet.
 
 .PHONY: lint
 lint: ## Run golangci-lint (bundles gofmt, govet, staticcheck, errcheck, ...).
+	$(call need,golangci-lint,brew install golangci-lint (see https://golangci-lint.run/welcome/install/))
 	golangci-lint run
 
 .PHONY: vuln
 vuln: ## Scan dependencies and stdlib for known vulnerabilities.
+	$(call need,govulncheck,go install golang.org/x/vuln/cmd/govulncheck@latest)
 	govulncheck $(PKG)
 
 .PHONY: fuzz
@@ -176,10 +186,12 @@ docker-smoke: docker-build ## Mirror the CI docker image behaviour check (needs 
 
 .PHONY: release-snapshot
 release-snapshot: ## Dry-run a release build with goreleaser (snapshot, no publish; needs goreleaser).
+	$(call need,goreleaser,brew install goreleaser (or go install github.com/goreleaser/goreleaser/v2@latest))
 	goreleaser release --snapshot --clean
 
 .PHONY: gifs
 gifs: ## Re-render the demo gifs from docs/assets/vhs/**/*.tape (needs vhs).
+	$(call need,vhs,brew install vhs (see https://github.com/charmbracelet/vhs))
 	@for tape in docs/assets/vhs/*/*.tape; do echo ">> vhs $$tape"; vhs "$$tape"; done
 
 ##@ Maintenance
@@ -196,6 +208,7 @@ install-tools: ## Install the auxiliary dev tools (see notes for golangci-lint).
 	#   brew install golangci-lint
 	# or see https://golangci-lint.run/welcome/install/
 	$(GO) install golang.org/x/vuln/cmd/govulncheck@latest
+	$(GO) install github.com/goreleaser/goreleaser/v2@latest
 
 .PHONY: clean
 clean: ## Remove build artifacts.
