@@ -171,6 +171,7 @@ demos: demo demo-complex demo-jobs demo-swarm demo-cargo demo-go demo-python ## 
 
 .PHONY: docker-build
 docker-build: ## Build the Docker image as depbisect:dev.
+	$(call need,docker,brew install --cask docker (see https://docs.docker.com/get-docker/))
 	docker build -t depbisect:dev .
 
 .PHONY: docker-smoke
