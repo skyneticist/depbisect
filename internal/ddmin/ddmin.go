@@ -189,17 +189,3 @@ func complements[T any](chunks [][]T) [][]T {
 	}
 	return comps
 }
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
