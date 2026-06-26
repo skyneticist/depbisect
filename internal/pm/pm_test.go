@@ -3,11 +3,17 @@ package pm
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/skyneticist/depbisect/internal/execx"
+	"golang.org/x/mod/module"
+	"golang.org/x/mod/zip"
 )
 
 func TestDetect(t *testing.T) {
@@ -121,11 +127,12 @@ func TestInstallInvocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	gc := fakeGo.Calls()[0]
-	if gc.Name != "go" || !reflect.DeepEqual(gc.Args, []string{"mod", "download"}) {
-		t.Errorf("go install cmd = %+v, want go mod download", gc)
+	if gc.Name != "go" || !reflect.DeepEqual(gc.Args, []string{"mod", "download", "all"}) {
+		t.Errorf("go install cmd = %+v, want go mod download all", gc)
 	}
-	// Candidate go.mod edits add or revert versions; -mod=mod lets `go mod
-	// download` populate go.sum (and reconcile go.mod) for them.
+	// Candidate go.mod edits add or revert versions; the `all` pattern with
+	// -mod=mod lets `go mod download` populate go.sum with the module-zip
+	// checksums `go build`/`go test` need (and reconcile go.mod) for them.
 	if !reflect.DeepEqual(gc.ExtraEnv, []string{"GOFLAGS=-mod=mod"}) {
 		t.Errorf("go install env = %v, want [GOFLAGS=-mod=mod]", gc.ExtraEnv)
 	}
@@ -271,5 +278,98 @@ func TestVersionUv(t *testing.T) {
 	}
 	if call := fake.Calls()[0]; !reflect.DeepEqual(call.Args, []string{"--version"}) {
 		t.Errorf("version args = %v, want [--version]", call.Args)
+	}
+}
+
+// TestGoInstallReconcilesGoSumZipChecksums is a real-toolchain regression test
+// for the gap that `go mod download all` closes. When a candidate reverts a
+// dependency, the worktree's go.sum lacks that version's module-zip checksum;
+// the install step must add it or the verification build fails with "missing
+// go.sum entry". A bare `go mod download` records only the "<mod>/go.mod"
+// checksum, leaving the build broken — TestInstallInvocation's fake runner
+// cannot catch that, so this drives the actual `go` toolchain end to end.
+//
+// It runs fully offline against a one-module file:// GOPROXY built here, so it
+// depends on nothing outside this repo's own dependencies.
+func TestGoInstallReconcilesGoSumZipChecksums(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping go toolchain integration test in -short mode")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("file:// GOPROXY path handling differs on Windows; covered on POSIX")
+	}
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("go not found on PATH")
+	}
+
+	const modPath, modVer = "depbisect.test/leaf", "v1.0.0"
+	leafGoMod := "module " + modPath + "\n\ngo 1.16\n"
+
+	// A canonical module zip for the leaf dependency, with no requirements of
+	// its own so `go mod download all` needs only this one zip.
+	src := t.TempDir()
+	mustWrite(t, filepath.Join(src, "go.mod"), leafGoMod)
+	mustWrite(t, filepath.Join(src, "leaf.go"),
+		"package leaf\n\n// Hello is referenced by the consumer so its build compiles this module.\nfunc Hello() string { return \"hi\" }\n")
+
+	// An offline file:// GOPROXY containing only the leaf module.
+	proxy := t.TempDir()
+	modDir := filepath.Join(proxy, modPath, "@v")
+	if err := os.MkdirAll(modDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(modDir, modVer+".mod"), leafGoMod)
+	mustWrite(t, filepath.Join(modDir, modVer+".info"), `{"Version":"`+modVer+`","Time":"2020-01-01T00:00:00Z"}`)
+	mustWrite(t, filepath.Join(modDir, "list"), modVer+"\n")
+	zf, err := os.Create(filepath.Join(modDir, modVer+".zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := zip.CreateFromDir(zf, module.Version{Path: modPath, Version: modVer}, src); err != nil {
+		_ = zf.Close()
+		t.Fatalf("create module zip: %v", err)
+	}
+	if err := zf.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GOPROXY", "file://"+filepath.ToSlash(proxy))
+	t.Setenv("GOSUMDB", "off")
+	t.Setenv("GOWORK", "off")
+
+	// A consumer module that imports the leaf package, deliberately written
+	// without a go.sum: the reverted-candidate state where the module-zip
+	// checksum is absent.
+	work := t.TempDir()
+	mustWrite(t, filepath.Join(work, "go.mod"),
+		"module depbisecttest\n\ngo 1.21\n\nrequire "+modPath+" "+modVer+"\n")
+	mustWrite(t, filepath.Join(work, "use.go"),
+		"package depbisecttest\n\nimport \""+modPath+"\"\n\nvar _ = leaf.Hello\n")
+
+	// Drive the production install path (go mod download all, GOFLAGS=-mod=mod).
+	res, err := (Installer{Runner: execx.Local{}, Manager: GO}).Install(context.Background(), work, nil)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("install exited %d:\n%s", res.ExitCode, res.Stderr)
+	}
+
+	// The regression assertion: a strictly read-only build must succeed, which
+	// is possible only if go.sum now holds the leaf module-zip checksum. With a
+	// bare `go mod download` install this fails with "missing go.sum entry".
+	build := exec.Command(goBin, "build", "-mod=readonly", "./...")
+	build.Dir = work
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("read-only build after install failed — go.sum zip checksum missing?\n%v\n%s", err, out)
+	}
+}
+
+// mustWrite writes body to path, failing the test on error.
+func mustWrite(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
 	}
 }

@@ -102,10 +102,15 @@ func (m Manager) installArgs() []string {
 		// command.
 		return []string{"fetch"}
 	case GO:
-		// `go mod download` resolves and fetches the modules named by the
-		// candidate go.mod and records their checksums in go.sum, without
-		// compiling. Build and test failures are left to the verify command.
-		return []string{"mod", "download"}
+		// `go mod download all` resolves and fetches every module in the
+		// candidate's build list, recording the full module-zip checksums in
+		// go.sum — not just the "<mod>/go.mod" checksums a bare `go mod
+		// download` writes. Those zip checksums are what `go build`/`go test`
+		// verify against, so the `all` pattern is required: without it a
+		// candidate that reverts a dependency installs cleanly yet fails
+		// verification with "missing go.sum entry". Compiling and testing are
+		// left to the verify command.
+		return []string{"mod", "download", "all"}
 	case UV:
 		// `uv lock` re-resolves uv.lock to satisfy the candidate pyproject.toml
 		// without creating a virtualenv or installing anything; a revert that
@@ -120,9 +125,9 @@ func (m Manager) installArgs() []string {
 }
 
 // installEnv returns extra environment for a candidate installation. Go runs
-// with -mod=mod so `go mod download` may add go.sum checksums (and reconcile
-// go.mod) for the reverted module versions a candidate introduces; the other
-// managers need none.
+// with -mod=mod so `go mod download all` may add go.sum checksums (and
+// reconcile go.mod) for the reverted module versions a candidate introduces;
+// the other managers need none.
 func (m Manager) installEnv() []string {
 	if m == GO {
 		return []string{"GOFLAGS=-mod=mod"}
