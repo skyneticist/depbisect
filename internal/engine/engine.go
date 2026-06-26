@@ -395,7 +395,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		checkpointActive = true
 	}
 
-	// Phase 4: set up the isolated worktree pool. Lane count never exceeds the
+	// Phase 5: set up the isolated worktree pool. Lane count never exceeds the
 	// number of changes, since no batch evaluates more subsets than that.
 	laneCount := jobs
 	if laneCount > len(changes) {
@@ -437,7 +437,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		progress.Detail("Created %d worktrees under %s", laneCount, parent)
 	}
 
-	// Phase 5: build the candidate executor over the lane pool. Each lane is a
+	// Phase 6: build the candidate executor over the lane pool. Each lane is a
 	// free worktree index; eval acquires one for the duration of a trial.
 	lanes := make(chan int, laneCount)
 	for i := 0; i < laneCount; i++ {
@@ -467,7 +467,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		storeOn:        checkpointActive,
 	}
 
-	// Phase 6: baselines.
+	// Phase 7: baselines.
 	progress.Step("Baseline", "1/2 | without updates (expect PASS)")
 	oldTrial, err := ex.eval(ctx, nil, "baseline-old", false)
 	if err != nil {
@@ -522,7 +522,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		return finish()
 	}
 
-	// Phase 7: delta debugging plus a 1-minimality proof.
+	// Phase 8: delta debugging plus a 1-minimality proof.
 	progress.Step("Bisect", "%d changes with ddmin", len(changes))
 	bestKnown, uncertainNeighbors, err := ex.minimize(ctx, changes)
 	if err != nil {
