@@ -203,9 +203,9 @@ count just finishes sooner.
 ./depbisect run --repo examples/demo-cargo-swarm/app --base HEAD~1 --runs 3 --jobs 12 -- cargo test
 ```
 
-![DepBisect isolating the eight consensus_* crates of the Cargo --jobs demo](../docs/cargo-jobs.gif)
+![DepBisect isolating the eight consensus_* crates of the Cargo --jobs demo](../docs/assets/gifs/rust/cargo-jobs.gif)
 
-![DepBisect isolating the twelve replica_* crates of the Cargo swarm demo](../docs/cargo-swarm.gif)
+![DepBisect isolating the twelve replica_* crates of the Cargo swarm demo](../docs/assets/gifs/rust/cargo-swarm.gif)
 
 Re-run any script to reset its generated repository.
 
@@ -241,11 +241,11 @@ command when it finishes:
 ./examples/make-demo-go-swarm.sh     # 28 modules -> 12 replica-* (try --jobs 12)
 ```
 
-![DepBisect narrowing twelve Go module bumps to the five-module culprit set](../docs/go-complex.gif)
+![DepBisect narrowing twelve Go module bumps to the five-module culprit set](../docs/assets/gifs/go/go-complex.gif)
 
-![DepBisect isolating the eight consensus-* modules of the Go --jobs demo](../docs/go-jobs.gif)
+![DepBisect isolating the eight consensus-* modules of the Go --jobs demo](../docs/assets/gifs/go/go-jobs.gif)
 
-![DepBisect isolating the twelve replica-* modules of the Go swarm demo](../docs/go-swarm.gif)
+![DepBisect isolating the twelve replica-* modules of the Go swarm demo](../docs/assets/gifs/go/go-swarm.gif)
 
 Re-run any script to reset its generated repository.
 

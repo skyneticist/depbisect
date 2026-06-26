@@ -25,7 +25,8 @@ depbisect run --base origin/main --runs 3 -- npm test
 ```
 
 `depbisect` runs entirely in a throwaway git worktree, so your checkout is never
-modified. It works with **npm** and **pnpm**.
+modified. It works with **npm** and **pnpm**, and the same binary also bisects
+**cargo** (Rust), **go** modules, and **uv** (Python) projects.
 
 Full documentation — flags, exit codes, the algorithm, and the GitHub Action:
 

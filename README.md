@@ -15,7 +15,7 @@ You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 
 `git bisect` walks *commits* — it can't help when the breakage lives inside a single dependency-update commit. DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies declared in your manifest (`package.json`, `Cargo.toml`, `go.mod`, or `pyproject.toml`) between two revisions, then applies [delta debugging](https://www.cs.purdue.edu/homes/xyzhang/fall07/Papers/delta-debugging.pdf) to isolate the exact subset responsible — all inside a throwaway worktree that never touches your checkout.
 
-![DepBisect narrowing 12 dependency changes down to the 5-package set that broke the build](docs/demo.gif)
+![DepBisect narrowing 12 dependency changes down to the 5-package set that broke the build](docs/assets/gifs/js/demo.gif)
 
 ## Features
 
@@ -120,7 +120,7 @@ depbisect run --base origin/main --runs 3 -- go test ./...
 
 The Go demos run fully offline via a generated `file://` module proxy; here DepBisect narrows twelve Go module bumps to the five-module set that breaks the build:
 
-![DepBisect narrowing twelve Go module bumps to the five-module culprit set that breaks the build](docs/go-complex.gif)
+![DepBisect narrowing twelve Go module bumps to the five-module culprit set that breaks the build](docs/assets/gifs/go/go-complex.gif)
 
 **Working in Python?** Same flow — auto-detected from a uv project (`pyproject.toml` with a `uv.lock`):
 
@@ -132,12 +132,12 @@ depbisect run --base origin/main --runs 3 -- uv run -- pytest
 declared dependencies, and prints the plan — installing nothing and never running your
 command:
 
-![DepBisect's --dry-run listing the two changed dependencies and the bisection plan, then exiting without installing anything](docs/dry-run.gif)
+![DepBisect's --dry-run listing the two changed dependencies and the bisection plan, then exiting without installing anything](docs/assets/gifs/js/dry-run.gif)
 
 **Interrupt and pick up later.** Press Ctrl-C mid-bisection and DepBisect checkpoints the
 completed trials; re-run with `--resume` to restore them instead of starting over:
 
-![DepBisect interrupted with Ctrl-C partway through a bisection, then resumed with --resume, restoring the completed trials from the on-disk checkpoint](docs/resume.gif)
+![DepBisect interrupted with Ctrl-C partway through a bisection, then resumed with --resume, restoring the completed trials from the on-disk checkpoint](docs/assets/gifs/js/resume.gif)
 
 > **No repo handy?** `./examples/make-demo.sh` builds a self-contained, offline demo
 > repository with a known culprit. See [examples/README.md](examples/README.md).
@@ -244,12 +244,12 @@ search runs, never *what* it finds.
 
 Sequentially (`--jobs 1`), a single worktree works through the candidates one at a time:
 
-![DepBisect bisecting 28 dependency changes sequentially with --jobs 1 — one worktree, one candidate at a time — isolating the twelve-package culprit in 15.6 seconds](docs/sequential.gif)
+![DepBisect bisecting 28 dependency changes sequentially with --jobs 1 — one worktree, one candidate at a time — isolating the twelve-package culprit in 15.6 seconds](docs/assets/gifs/js/sequential.gif)
 
 The same bisection with `--jobs 12` spreads those candidates across twelve worktrees,
 reaching the identical twelve-package result in roughly a third of the wall time:
 
-![The same 28-change bisection with --jobs 12 — twelve worktrees evaluating candidates concurrently — reaching the identical twelve-package result in 5.5 seconds](docs/parallel-only.gif)
+![The same 28-change bisection with --jobs 12 — twelve worktrees evaluating candidates concurrently — reaching the identical twelve-package result in 5.5 seconds](docs/assets/gifs/js/parallel-only.gif)
 
 <details>
 <summary><b>Timeouts, checkpoints, reports, and environment</b></summary>
