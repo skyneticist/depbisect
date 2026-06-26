@@ -13,7 +13,7 @@
 
 ## Candidate semantics
 
-A candidate is "the `--to` source tree, with dependency specs reverted to their `--base` values for every change *not* in the subset". Reverting an added dependency removes it; reverting a removed one restores it. Installs run `npm install` / `pnpm install --no-frozen-lockfile` / `cargo fetch` / `go mod download` / `uv lock`, so the package manager reconciles the lockfile inside the worktree only.
+A candidate is "the `--to` source tree, with dependency specs reverted to their `--base` values for every change *not* in the subset". Reverting an added dependency removes it; reverting a removed one restores it. Installs run `npm install` / `pnpm install --no-frozen-lockfile` / `cargo fetch` / `go mod download all` / `uv lock`, so the package manager reconciles the lockfile inside the worktree only.
 
 ## Flakiness handling
 

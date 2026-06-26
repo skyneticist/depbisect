@@ -13,7 +13,7 @@ All notable changes to this project are documented here. The format follows
   `Cargo.lock`. Auto-detected from `Cargo.toml`, or select with `--pm cargo`.
 - Go modules support: bisect direct `go.mod` `require` changes, parsed and
   rendered with `golang.org/x/mod/modfile` so candidates preserve formatting,
-  with `go mod download` candidate installs (`GOFLAGS=-mod=mod`) and
+  with `go mod download all` candidate installs (`GOFLAGS=-mod=mod`) and
   resolved-version annotations from `go.sum`. Auto-detected from `go.mod`, or
   select with `--pm go`; indirect and `replace`d requires are skipped, and
   `go.work` workspaces are unsupported. DepBisect is now multi-ecosystem
