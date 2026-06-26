@@ -16,7 +16,7 @@ COVER_MIN ?= 80.0
 # need — guard a recipe that shells out to an optional tool. Prints an
 # actionable install hint instead of make's cryptic "<tool>: No such file or
 # directory" when the tool is absent. Usage as the first line of a recipe:
-#   $(call need,goreleaser,brew install goreleaser)
+#   $(call need,goreleaser,go install github.com/goreleaser/goreleaser/v2@latest)
 define need
 @command -v $(1) >/dev/null 2>&1 || { printf '\n\033[1;31m%s not found\033[0m — needed by make %s\n  install: %s\n\n' '$(1)' '$@' '$(2)'; exit 1; }
 endef
@@ -74,7 +74,7 @@ vet: ## Run go vet.
 
 .PHONY: lint
 lint: ## Run golangci-lint (bundles gofmt, govet, staticcheck, errcheck, ...).
-	$(call need,golangci-lint,brew install golangci-lint (see https://golangci-lint.run/welcome/install/))
+	$(call need,golangci-lint,see https://golangci-lint.run/welcome/install/)
 	golangci-lint run
 
 .PHONY: vuln
@@ -93,8 +93,12 @@ fuzz: ## Fuzz each target for $(FUZZTIME) (override: make fuzz FUZZTIME=2m).
 bench: ## Run all benchmarks.
 	$(GO) test -run='^$$' -bench=. -benchmem ./...
 
+.PHONY: test-make
+test-make: ## Lint the Makefile's optional-tool install hints.
+	./scripts/test-make-guards.sh
+
 .PHONY: check
-check: fmt-check vet lint test test-race ## Run the full pre-PR gate.
+check: fmt-check vet lint test-make test test-race ## Run the full pre-PR gate.
 
 .PHONY: ci
 ci: check cover vuln fuzz ## Full local pre-push mirror: check + cover + vuln + fuzz smoke.
@@ -171,7 +175,7 @@ demos: demo demo-complex demo-jobs demo-swarm demo-cargo demo-go demo-python ## 
 
 .PHONY: docker-build
 docker-build: ## Build the Docker image as depbisect:dev.
-	$(call need,docker,brew install --cask docker (see https://docs.docker.com/get-docker/))
+	$(call need,docker,see https://docs.docker.com/get-docker/)
 	docker build -t depbisect:dev .
 
 .PHONY: docker-smoke
@@ -187,12 +191,12 @@ docker-smoke: docker-build ## Mirror the CI docker image behaviour check (needs 
 
 .PHONY: release-snapshot
 release-snapshot: ## Dry-run a release build with goreleaser (snapshot, no publish; needs goreleaser).
-	$(call need,goreleaser,brew install goreleaser (or go install github.com/goreleaser/goreleaser/v2@latest))
+	$(call need,goreleaser,go install github.com/goreleaser/goreleaser/v2@latest)
 	goreleaser release --snapshot --clean
 
 .PHONY: gifs
 gifs: ## Re-render the demo gifs from docs/assets/vhs/**/*.tape (needs vhs).
-	$(call need,vhs,brew install vhs (see https://github.com/charmbracelet/vhs))
+	$(call need,vhs,see https://github.com/charmbracelet/vhs)
 	@for tape in docs/assets/vhs/*/*.tape; do echo ">> vhs $$tape"; vhs "$$tape"; done
 
 ##@ Maintenance
@@ -205,9 +209,8 @@ tidy: ## Tidy go.mod / go.sum.
 install-tools: ## Install the auxiliary dev tools (see notes for golangci-lint).
 	# golangci-lint bundles gofmt, govet, staticcheck, errcheck and more.
 	# Recent releases need a current Go toolchain to build from source, so
-	# install the prebuilt binary instead, e.g.:
-	#   brew install golangci-lint
-	# or see https://golangci-lint.run/welcome/install/
+	# install the prebuilt binary per the official instructions:
+	#   https://golangci-lint.run/welcome/install/
 	$(GO) install golang.org/x/vuln/cmd/govulncheck@latest
 	$(GO) install github.com/goreleaser/goreleaser/v2@latest
 
