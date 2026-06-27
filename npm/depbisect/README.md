@@ -1,6 +1,6 @@
 # depbisect
 
-> **`git bisect`, but for dependency updates.** Find the smallest set of dependency changes between two Git revisions that makes a command fail — and prove it's minimal.
+> **git bisect, but for dependency updates.** Find the smallest set of dependency changes between two Git revisions that makes a command fail — and prove it's minimal.
 
 [![CI](https://github.com/skyneticist/depbisect/actions/workflows/ci.yml/badge.svg)](https://github.com/skyneticist/depbisect/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/skyneticist/depbisect?sort=semver)](https://github.com/skyneticist/depbisect/releases)
