@@ -57,8 +57,6 @@ jobs:
         run: node scripts/build-npm.mjs "${{ steps.ver.outputs.version }}"
 
       - name: Publish platform packages, then the launcher
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           for dir in npm/@depbisect/*/; do
