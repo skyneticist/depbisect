@@ -30,6 +30,7 @@ type fakeGit struct {
 	pruned             int
 	dirty              map[string]bool
 	failWorktreeRemove bool
+	failPrune          bool
 	onReset            func()
 	onRemove           func()
 }
@@ -118,6 +119,9 @@ func (g *fakeGit) PruneWorktrees(ctx context.Context) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.pruned++
+	if g.failPrune {
+		return errors.New("prune refused by git")
+	}
 	return nil
 }
 
@@ -351,15 +355,18 @@ type trialProgressEvent struct {
 }
 
 type recordingProgress struct {
-	steps  []string
-	trials []trialProgressEvent
+	steps   []string
+	details []string
+	trials  []trialProgressEvent
 }
 
 func (p *recordingProgress) Step(label, format string, args ...any) {
 	p.steps = append(p.steps, label+" "+fmt.Sprintf(format, args...))
 }
 
-func (p *recordingProgress) Detail(string, ...any) {}
+func (p *recordingProgress) Detail(format string, args ...any) {
+	p.details = append(p.details, fmt.Sprintf(format, args...))
+}
 
 func (p *recordingProgress) Trial(number int, role string, applied, total int, phase string, elapsed time.Duration) {
 	p.trials = append(p.trials, trialProgressEvent{
@@ -1738,6 +1745,100 @@ func TestValidateCheckpointTrialIndexInError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "3") {
 		t.Errorf("error %q should identify trial 3 by index", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// cleanup / removeWorktree — direct unit tests for uncovered branches
+// ---------------------------------------------------------------------------
+
+// TestCleanupKeepWorktreesParallelRemovesExtras verifies the parallel
+// --keep-worktrees path: when more than one worktree was created (e.g. -j3),
+// only dirs[0] is kept for the user to inspect; every additional lane must be
+// cleaned up. A stale extra worktree is indistinguishable from the minimal
+// set and would silently mislead the user.
+func TestCleanupKeepWorktreesParallelRemovesExtras(t *testing.T) {
+	git := &fakeGit{}
+	progress := &recordingProgress{}
+	eng := &Engine{Git: git}
+
+	// Simulate three lanes created under a parent temp directory.
+	parent := t.TempDir()
+	dirs := []string{
+		filepath.Join(parent, "worktree-0"),
+		filepath.Join(parent, "worktree-1"),
+		filepath.Join(parent, "worktree-2"),
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res := &Result{}
+	eng.cleanup(parent, dirs, true /* keep */, res, progress)
+
+	// Only the first worktree should be kept.
+	if res.KeptWorktree != dirs[0] {
+		t.Errorf("KeptWorktree = %q, want %q", res.KeptWorktree, dirs[0])
+	}
+	if _, err := os.Stat(dirs[0]); err != nil {
+		t.Errorf("dirs[0] was removed but should be kept: %v", err)
+	}
+
+	// Extra worktrees must be gone.
+	for _, extra := range dirs[1:] {
+		if _, err := os.Stat(extra); !os.IsNotExist(err) {
+			t.Errorf("extra worktree %s still exists; should have been removed", extra)
+		}
+	}
+
+	// A diagnostic must mention the number of worktrees so the user knows the
+	// kept one is not necessarily the final minimal-set worktree.
+	found := false
+	for _, d := range res.Diagnostics {
+		if strings.Contains(d, "3") && strings.Contains(d, "worktree") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("diagnostics %v should mention the 3-worktree count", res.Diagnostics)
+	}
+}
+
+// TestRemoveWorktreePruneFailureSurfacesViaProgress verifies that when both
+// git-worktree-remove and the subsequent git-worktree-prune fail, the engine
+// logs the prune failure via progress.Detail rather than swallowing it. This
+// is the only feedback the user has that the git administrative state may be
+// inconsistent after a run.
+func TestRemoveWorktreePruneFailureSurfacesViaProgress(t *testing.T) {
+	git := &fakeGit{failWorktreeRemove: true, failPrune: true}
+	progress := &recordingProgress{}
+	eng := &Engine{Git: git}
+
+	// Create a real directory so os.RemoveAll (the fallback inside
+	// removeWorktree) has something to act on.
+	dir := t.TempDir()
+	eng.removeWorktree(dir, progress)
+
+	// The directory should be gone via the os.RemoveAll fallback even though
+	// git refused to remove the worktree.
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("worktree dir %s still exists after removeWorktree fallback", dir)
+	}
+
+	// Prune failure must be surfaced so the operator knows git's worktree
+	// list may be stale.
+	found := false
+	for _, d := range progress.details {
+		if strings.Contains(d, "worktree prune failed") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("progress.details = %v; want a 'worktree prune failed' message", progress.details)
 	}
 }
 
