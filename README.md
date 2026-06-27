@@ -17,6 +17,8 @@ You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 
 ![DepBisect narrowing 12 dependency changes down to the 5-package set that broke the build](docs/assets/gifs/js/demo.gif)
 
+If DepBisect saves you a debugging session, [a star goes a long way](https://github.com/skyneticist/depbisect) — it's how other developers find it. ⭐
+
 ## Features
 
 - **Provably minimal.** Runs Zeller's `ddmin` delta-debugging algorithm plus a one-by-one removal pass, so the answer is *1-minimal* — removing any single dependency from the set makes the failure stop reproducing — not merely "some failing subset."
@@ -27,8 +29,6 @@ You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 - **Deterministic & memoized.** Identical inputs produce an identical bisection path, and no dependency subset is ever installed or tested twice.
 - **CI-ready.** Meaningful exit codes (0–5), a schema-stable JSON report, and a reusable composite GitHub Action.
 - **Honest by design.** Lockfile-only changes, workspaces, and flaky baselines surface as clear diagnostics — DepBisect would rather say "inconclusive" than overstate certainty.
-
-> ⭐ **Star the repo** if DepBisect saves you a debugging session — it's how other developers find it.
 
 ## Why DepBisect
 
