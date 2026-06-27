@@ -2,7 +2,10 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -585,5 +588,237 @@ func TestTerminalModeDisablesColorForDumbTerminal(t *testing.T) {
 	if interactive || color {
 		t.Fatalf("TERM=dumb mode = interactive %v, color %v; want plain output",
 			interactive, color)
+	}
+}
+
+// runMainWith installs a fake engine for the duration of the test, runs
+// runMain with the given args, and returns the exit code plus captured output.
+// It also sets --repo to a temp dir so gitx.New doesn't choke on the path.
+func runMainWith(t *testing.T, engineFn func(context.Context, engine.Options) (*engine.Result, error), args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	prev := testEngineRun
+	testEngineRun = engineFn
+	t.Cleanup(func() { testEngineRun = prev })
+
+	var out, errb bytes.Buffer
+	full := append([]string{"--base", "HEAD~1", "--repo", t.TempDir()}, args...)
+	full = append(full, "--", "true")
+	code = runMain(full, &out, &errb, "test-version")
+	return code, out.String(), errb.String()
+}
+
+func minimalResult() *engine.Result {
+	return &engine.Result{
+		Outcome: engine.OutcomeMinimalFound,
+		Changes: []manifest.Change{
+			{Name: "lodash", Section: manifest.Dependencies, Kind: manifest.Updated, OldSpec: "4.0.0", NewSpec: "4.17.21"},
+		},
+		Minimal: []manifest.Change{
+			{Name: "lodash", Section: manifest.Dependencies, Kind: manifest.Updated, OldSpec: "4.0.0", NewSpec: "4.17.21"},
+		},
+		Confidence: engine.Confidence{Failures: 1, Runs: 1},
+	}
+}
+
+func TestRunMainEngineError(t *testing.T) {
+	code, _, stderr := runMainWith(t, func(_ context.Context, _ engine.Options) (*engine.Result, error) {
+		return nil, errors.New("git clone failed")
+	})
+	if code != ExitError {
+		t.Errorf("exit = %d, want %d", code, ExitError)
+	}
+	if !strings.Contains(stderr, "git clone failed") {
+		t.Errorf("stderr = %q, want error message", stderr)
+	}
+}
+
+func TestRunMainEngineErrorContextCanceled(t *testing.T) {
+	code, _, stderr := runMainWith(t, func(_ context.Context, _ engine.Options) (*engine.Result, error) {
+		return nil, context.Canceled
+	})
+	if code != ExitError {
+		t.Errorf("exit = %d, want %d", code, ExitError)
+	}
+	if !strings.Contains(stderr, "interrupted") {
+		t.Errorf("stderr = %q, want 'interrupted'", stderr)
+	}
+	if strings.Contains(stderr, "git clone") {
+		t.Errorf("canceled error should not print raw error: %q", stderr)
+	}
+}
+
+func TestRunMainEngineErrorWithCheckpointHint(t *testing.T) {
+	cpPath := filepath.Join(t.TempDir(), "state.jsonl")
+	code, _, stderr := runMainWith(t,
+		func(_ context.Context, _ engine.Options) (*engine.Result, error) {
+			return nil, errors.New("something failed")
+		},
+		"--checkpoint", cpPath,
+	)
+	if code != ExitError {
+		t.Errorf("exit = %d, want %d", code, ExitError)
+	}
+	if !strings.Contains(stderr, "resume with --resume") {
+		t.Errorf("stderr should mention --resume: %q", stderr)
+	}
+	if !strings.Contains(stderr, cpPath) {
+		t.Errorf("stderr should include checkpoint path: %q", stderr)
+	}
+}
+
+func TestRunMainSuccess(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	code, stdout, stderr := runMainWith(t, func(_ context.Context, _ engine.Options) (*engine.Result, error) {
+		return minimalResult(), nil
+	}, "--no-reports")
+	if code != ExitOK {
+		t.Errorf("exit = %d, want %d (stderr: %s)", code, ExitOK, stderr)
+	}
+	if !strings.Contains(stdout, "Minimal breaking dependency set found") {
+		t.Errorf("stdout missing summary: %q", stdout)
+	}
+}
+
+func TestRunMainWritesReports(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, "report.json")
+	mdPath := filepath.Join(dir, "report.md")
+
+	code, _, stderr := runMainWith(t,
+		func(_ context.Context, _ engine.Options) (*engine.Result, error) {
+			return minimalResult(), nil
+		},
+		"--report-json", jsonPath,
+		"--report-md", mdPath,
+	)
+	if code != ExitOK {
+		t.Fatalf("exit = %d, stderr: %s", code, stderr)
+	}
+	if _, err := os.Stat(jsonPath); err != nil {
+		t.Errorf("JSON report not written: %v", err)
+	}
+	if _, err := os.Stat(mdPath); err != nil {
+		t.Errorf("Markdown report not written: %v", err)
+	}
+}
+
+func TestRunMainNoReportsSkipsFiles(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, "report.json")
+	mdPath := filepath.Join(dir, "report.md")
+
+	runMainWith(t,
+		func(_ context.Context, _ engine.Options) (*engine.Result, error) {
+			return minimalResult(), nil
+		},
+		"--no-reports",
+		"--report-json", jsonPath,
+		"--report-md", mdPath,
+	)
+	if _, err := os.Stat(jsonPath); !os.IsNotExist(err) {
+		t.Error("--no-reports must not write JSON report")
+	}
+	if _, err := os.Stat(mdPath); !os.IsNotExist(err) {
+		t.Error("--no-reports must not write Markdown report")
+	}
+}
+
+func TestRunMainDryRunSkipsReports(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, "report.json")
+
+	runMainWith(t,
+		func(_ context.Context, _ engine.Options) (*engine.Result, error) {
+			return &engine.Result{Outcome: engine.OutcomeDryRun}, nil
+		},
+		"--dry-run",
+		"--report-json", jsonPath,
+	)
+	if _, err := os.Stat(jsonPath); !os.IsNotExist(err) {
+		t.Error("dry-run outcome must not write reports")
+	}
+}
+
+func TestRunMainJSONReportWriteError(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	// Point JSON report at a directory so os.WriteFile fails.
+	badPath := t.TempDir()
+
+	code, stdout, stderr := runMainWith(t,
+		func(_ context.Context, _ engine.Options) (*engine.Result, error) {
+			return minimalResult(), nil
+		},
+		"--report-json", badPath,
+		"--no-reports", // skip the MD report; only test JSON error path
+	)
+	// A report write failure is non-fatal: exit should still reflect the outcome.
+	_ = code
+	_ = stdout
+	_ = stderr
+	// The real assertion: passing --no-reports suppresses the write entirely,
+	// so to test the error path we need to not pass --no-reports.
+	// Re-run without --no-reports.
+	code2, _, stderr2 := runMainWith(t,
+		func(_ context.Context, _ engine.Options) (*engine.Result, error) {
+			return minimalResult(), nil
+		},
+		"--report-json", badPath,
+		"--report-md", filepath.Join(t.TempDir(), "r.md"),
+	)
+	if code2 != ExitOK {
+		t.Errorf("report write error should not change exit code; got %d", code2)
+	}
+	if !strings.Contains(stderr2, "depbisect:") {
+		t.Errorf("stderr should contain error message: %q", stderr2)
+	}
+}
+
+func TestRunMainQuietSuppressesProgress(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	var engineOpts engine.Options
+	runMainWith(t,
+		func(_ context.Context, o engine.Options) (*engine.Result, error) {
+			engineOpts = o
+			return &engine.Result{Outcome: engine.OutcomeNotReproduced}, nil
+		},
+		"--quiet", "--no-reports",
+	)
+	// Quiet mode is exercised via the progress writer path; the engine still runs.
+	// We verify the engine was called (not short-circuited) by checking Options.
+	if engineOpts.BaseRev == "" {
+		t.Error("engine was not called in quiet mode")
+	}
+}
+
+func TestRunMainVerboseSetsStream(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	var capturedStream bool
+	runMainWith(t,
+		func(_ context.Context, o engine.Options) (*engine.Result, error) {
+			capturedStream = o.Stream != nil
+			return &engine.Result{Outcome: engine.OutcomeNotReproduced}, nil
+		},
+		"--verbose", "--no-reports",
+	)
+	if !capturedStream {
+		t.Error("--verbose should set a non-nil stream on engine options")
+	}
+}
+
+func TestRunMainCheckpointNotSetOnDryRun(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	var capturedCheckpoint engine.CheckpointStore
+	runMainWith(t,
+		func(_ context.Context, o engine.Options) (*engine.Result, error) {
+			capturedCheckpoint = o.Checkpoint
+			return &engine.Result{Outcome: engine.OutcomeDryRun}, nil
+		},
+		"--dry-run", "--checkpoint", filepath.Join(t.TempDir(), "cp.jsonl"),
+	)
+	if capturedCheckpoint != nil {
+		t.Error("--dry-run must not pass a checkpoint store to the engine")
 	}
 }

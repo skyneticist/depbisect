@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -225,5 +226,285 @@ func TestFileStoreClearIsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "never-created.jsonl")
 	if err := NewFileStore(path).Clear(); err != nil {
 		t.Fatalf("Clear of an absent checkpoint = %v, want nil", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Filesystem safety: behavioral invariants
+// ---------------------------------------------------------------------------
+
+// TestFileStoreStartNormalizesPermissionsOnExistingFile verifies that Start
+// tightens permissions to 0o600 even when the checkpoint file already exists
+// with broader access. Without this, a manually-edited or incorrectly-umask'd
+// file could expose trial data to other users on the same machine.
+func TestFileStoreStartNormalizesPermissionsOnExistingFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permissions not enforced on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "checkpoint.jsonl")
+
+	// Pre-create the file with overly-broad permissions.
+	if err := os.WriteFile(path, []byte("old data\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewFileStore(path).Start(testCheckpoint()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("permissions after Start = %o, want 0o600 (data exposed to other users)", got)
+	}
+}
+
+// TestFileStoreStartTruncatesExistingCheckpoint verifies that calling Start
+// on an already-existing checkpoint file completely replaces it. Residual
+// trial records from a previous run must not survive a fresh Start; if they
+// did, a resumed run would re-apply already-tested combinations.
+func TestFileStoreStartTruncatesExistingCheckpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "checkpoint.jsonl")
+	store := NewFileStore(path)
+	cp := testCheckpoint()
+
+	// First run: start and record two trials.
+	if err := store.Start(cp); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{"baseline-old", "baseline-new"} {
+		if err := store.Append(engine.Trial{Role: role, Outcome: "pass"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Second run: Start again with a different fingerprint.
+	cp2 := cp
+	cp2.Fingerprint.BaseSHA = "new-base-sha"
+	if err := store.Start(cp2); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Fingerprint.BaseSHA != "new-base-sha" {
+		t.Errorf("BaseSHA = %q, want new-base-sha (old header persisted after re-Start)", got.Fingerprint.BaseSHA)
+	}
+	if len(got.Trials) != 0 {
+		t.Errorf("Trials = %v, want none (old trials persisted after re-Start)", got.Trials)
+	}
+}
+
+// TestFileStoreStartStripsInputTrials verifies that any Trials present on the
+// Checkpoint passed to Start are NOT written to the header record. If they
+// were, Load would see them twice: once from the header and once from the
+// Append records, corrupting the resume state.
+func TestFileStoreStartStripsInputTrials(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "checkpoint.jsonl")
+	store := NewFileStore(path)
+
+	// Pass a checkpoint with pre-populated Trials (as the engine might
+	// construct when collecting results before calling Start).
+	cp := testCheckpoint()
+	cp.Trials = []engine.Trial{
+		{Role: "candidate", Outcome: "fail"},
+		{Role: "candidate", Outcome: "pass"},
+	}
+
+	if err := store.Start(cp); err != nil {
+		t.Fatal(err)
+	}
+	// Append one real trial after Start.
+	if err := store.Append(engine.Trial{Role: "baseline-old", Outcome: "pass"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Trials) != 1 {
+		t.Errorf("Trials = %v; Start should strip pre-existing Trials from the header record, leaving only Appended ones", got.Trials)
+	}
+	if got.Trials[0].Role != "baseline-old" {
+		t.Errorf("unexpected trial role %q after round-trip", got.Trials[0].Role)
+	}
+}
+
+// TestFileStoreConcurrentAppendAllRecordsLand verifies that simultaneous
+// Append calls from multiple goroutines all produce complete, parseable
+// records. The store relies on O_APPEND for atomicity; this test would
+// surface any record interleaving or partial-write corruption.
+func TestFileStoreConcurrentAppendAllRecordsLand(t *testing.T) {
+	const goroutines = 20
+	path := filepath.Join(t.TempDir(), "concurrent.jsonl")
+	store := NewFileStore(path)
+
+	if err := store.Start(testCheckpoint()); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, goroutines)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			trial := engine.Trial{
+				Role:    "candidate",
+				Applied: []string{strings.Repeat("x", n+1)},
+				Outcome: "fail",
+			}
+			if err := store.Append(trial); err != nil {
+				errCh <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Errorf("Append error: %v", err)
+	}
+	if t.Failed() {
+		return
+	}
+
+	got, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load after concurrent Appends: %v", err)
+	}
+	if len(got.Trials) != goroutines {
+		t.Errorf("got %d trials, want %d (some concurrent Appends were lost or corrupted)", len(got.Trials), goroutines)
+	}
+}
+
+// TestFileStoreAppendAfterFileDeletion verifies that Append returns a clear,
+// actionable error (os.ErrNotExist) when the checkpoint file is removed
+// between Start and the first Append. The engine must surface this rather than
+// silently losing trial data.
+func TestFileStoreAppendAfterFileDeletion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "checkpoint.jsonl")
+	store := NewFileStore(path)
+
+	if err := store.Start(testCheckpoint()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+
+	err := store.Append(engine.Trial{Role: "baseline-old", Outcome: "pass"})
+	if err == nil {
+		t.Fatal("Append after file deletion succeeded; expected an error")
+	}
+	if !os.IsNotExist(err) {
+		t.Errorf("Append error = %v; want a not-exist error so callers know the checkpoint is gone", err)
+	}
+}
+
+// TestFileStorePathIsExactAndExclusive verifies that Start and Append write
+// only to the configured path and create no additional files in its directory.
+// A store that spills temp files or lock files could interfere with the user's
+// working tree.
+func TestFileStorePathIsExactAndExclusive(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "checkpoint.jsonl")
+	store := NewFileStore(path)
+
+	if err := store.Start(testCheckpoint()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(engine.Trial{Role: "baseline-old", Outcome: "pass"}); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "checkpoint.jsonl" {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Errorf("dir contains %v; want only [checkpoint.jsonl] (store must not create side files)", names)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Error-path coverage
+// ---------------------------------------------------------------------------
+
+// TestWriteRecordFailsOnWriteError verifies that writeRecord propagates a
+// write failure rather than swallowing it. A write error means the trial
+// record was not durably stored; the caller must see the error so it can
+// surface it and prevent a false "successfully resumed" state.
+//
+// The test uses the read end of an os.Pipe as the target: writing to a
+// read-only file descriptor returns EBADF on POSIX systems, triggering the
+// error path without requiring a failing storage device.
+func TestWriteRecordFailsOnWriteError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pipe write-to-read-end behavior differs on Windows")
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	rec := record{Type: "trial", Trial: &engine.Trial{Role: "candidate", Outcome: "fail"}}
+	if err := writeRecord(r, rec); err == nil {
+		t.Fatal("writeRecord to read-end of pipe succeeded; expected a write error")
+	}
+}
+
+// TestFileStoreStartChmodErrorReturnsErr verifies that Start returns the error
+// if Chmod fails rather than continuing with incorrect permissions. Continuing
+// would leave the file accessible to other users on a shared machine.
+//
+// /dev/null is used because it is owned by root; a non-root process cannot
+// fchmod it, so the Chmod call reliably fails with EPERM without any
+// I/O-device side-effects.
+func TestFileStoreStartChmodErrorReturnsErr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX Chmod semantics not applicable on Windows")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("running as root: Chmod on any file succeeds, cannot trigger EPERM")
+	}
+
+	store := NewFileStore("/dev/null")
+	if err := store.Start(testCheckpoint()); err == nil {
+		t.Fatal("Start with a root-owned path succeeded; expected Chmod to fail with EPERM")
+	}
+}
+
+// TestFileStoreAppendWriteErrorReturnsErr verifies that Append surfaces a
+// write failure so the engine can stop and report it rather than continuing
+// with an incomplete checkpoint that would silently corrupt a future --resume.
+//
+// This test relies on /dev/full, a Linux character device that returns ENOSPC
+// on every write. On platforms where /dev/full is absent the test is skipped;
+// it runs reliably on the Linux CI environment.
+func TestFileStoreAppendWriteErrorReturnsErr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("not applicable on Windows")
+	}
+	if _, err := os.Stat("/dev/full"); os.IsNotExist(err) {
+		t.Skip("/dev/full not available on this platform (present on Linux CI)")
+	}
+
+	// Point the store directly at /dev/full. Start is bypassed deliberately:
+	// Append's OpenFile uses only O_APPEND|O_WRONLY (no O_CREATE), so it will
+	// open the device, and the subsequent Write will return ENOSPC.
+	store := NewFileStore("/dev/full")
+	err := store.Append(engine.Trial{Role: "baseline-old", Outcome: "pass"})
+	if err == nil {
+		t.Fatal("Append to /dev/full succeeded; expected ENOSPC write error")
 	}
 }

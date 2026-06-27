@@ -1,6 +1,6 @@
 {
   "name": "depbisect",
-  "version": "0.0.0-managed",
+  "version": "0.1.3",
   "description": "git bisect, but for dependency updates — find the minimal set of package.json changes between two commits that breaks your build, and prove it's minimal.",
   "keywords": [
     "bisect",
@@ -38,11 +38,11 @@
     "node": ">=16"
   },
   "optionalDependencies": {
-    "@depbisect/linux-x64": "0.0.0-managed",
-    "@depbisect/linux-arm64": "0.0.0-managed",
-    "@depbisect/darwin-x64": "0.0.0-managed",
-    "@depbisect/darwin-arm64": "0.0.0-managed",
-    "@depbisect/win32-x64": "0.0.0-managed",
-    "@depbisect/win32-arm64": "0.0.0-managed"
+    "@depbisect/linux-x64": "0.1.3",
+    "@depbisect/linux-arm64": "0.1.3",
+    "@depbisect/darwin-x64": "0.1.3",
+    "@depbisect/darwin-arm64": "0.1.3",
+    "@depbisect/win32-x64": "0.1.3",
+    "@depbisect/win32-arm64": "0.1.3"
   }
 }

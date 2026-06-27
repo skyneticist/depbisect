@@ -20,6 +20,10 @@ import (
 	"github.com/skyneticist/depbisect/internal/verify"
 )
 
+// testEngineRun, when non-nil, replaces the real engine.Engine.Run call in
+// runMain so unit tests can exercise its branches without a real git repo.
+var testEngineRun func(context.Context, engine.Options) (*engine.Result, error)
+
 // Exit codes are part of the CLI contract; see `depbisect help`.
 const (
 	ExitOK            = 0 // minimal set found, or informational command succeeded
@@ -273,7 +277,14 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 		Progress: progressOutput,
 	}
 
-	res, err := eng.Run(ctx, engine.Options{
+	engineRun := func(ctx context.Context, o engine.Options) (*engine.Result, error) {
+		return eng.Run(ctx, o)
+	}
+	if testEngineRun != nil {
+		engineRun = testEngineRun
+	}
+
+	res, err := engineRun(ctx, engine.Options{
 		BaseRev:       opts.base,
 		ToRev:         opts.to,
 		Command:       opts.command,

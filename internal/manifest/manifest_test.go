@@ -253,6 +253,16 @@ const packageLockV3 = `{
   }
 }`
 
+const packageLockV3Link = `{
+  "name": "demo",
+  "lockfileVersion": 3,
+  "packages": {
+    "": {"dependencies": {"leftpad": "file:../pkgs/leftpad-1.0.0"}},
+    "node_modules/leftpad": {"resolved": "file:../pkgs/leftpad-1.0.0", "link": true},
+    "../pkgs/leftpad-1.0.0": {"name": "leftpad", "version": "1.0.0"}
+  }
+}`
+
 const packageLockV1 = `{
   "name": "demo",
   "lockfileVersion": 1,
@@ -269,6 +279,7 @@ func TestParsePackageLock(t *testing.T) {
 		want Resolved
 	}{
 		{"v3 packages", packageLockV3, Resolved{"alpha": "1.0.3", "@scope/pkg": "2.1.0"}},
+		{"v3 file link", packageLockV3Link, Resolved{"leftpad": "1.0.0"}},
 		{"v1 dependencies", packageLockV1, Resolved{"alpha": "1.0.3", "beta": "2.0.0"}},
 	}
 	for _, tc := range cases {

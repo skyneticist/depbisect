@@ -485,18 +485,68 @@ func printModernSummary(w io.Writer, res *engine.Result, mdPath, jsonPath string
 	}
 }
 
-// writeModernChanges lists dependency changes with the name highlighted and the
-// version arrow dimmed, matching the live ddmin culprit styling.
+// writeModernChanges lists dependency changes with the path prefix dimmed and
+// the leaf name highlighted, with version columns aligned across all entries.
 func writeModernChanges(w io.Writer, title string, changes []manifest.Change) {
 	if len(changes) == 0 {
 		return
 	}
 	fmt.Fprintf(w, "\n%*s%s\n", modernGutter, "", paint(ansiGray, title))
+
+	maxLen := 0
+	for _, c := range changes {
+		if n := len(c.Name); n > maxLen {
+			maxLen = n
+		}
+	}
+
 	for _, change := range changes {
-		text := change.String()
-		text = strings.Replace(text, "->", paint(ansiGray, glyphArrow), 1)
-		text = strings.Replace(text, change.Name, paint(ansiRed, change.Name), 1)
-		fmt.Fprintf(w, "%*s%s %s\n", modernGutter*2, "", paint(ansiRed, glyphFail), text)
+		prefix, leaf := splitPackageName(change.Name)
+		pad := strings.Repeat(" ", maxLen-len(change.Name)+2)
+		ver := changeVersionStr(change)
+		ver = strings.Replace(ver, "->", paint(ansiGray, glyphArrow), 1)
+		namePart := paint(ansiGray, prefix) + paint(ansiRed, leaf)
+		fmt.Fprintf(w, "%*s%s %s%s%s\n", modernGutter*2, "", paint(ansiRed, glyphFail), namePart, pad, paint(ansiGray, ver))
+	}
+}
+
+// splitPackageName splits a package name into a dimmed path prefix and a
+// highlighted leaf. Only names whose first path segment looks like a host
+// (contains a dot, e.g. github.com/org/pkg) are split; npm scoped packages
+// (@scope/pkg) and plain names are returned as leaf only.
+func splitPackageName(name string) (prefix, leaf string) {
+	slash := strings.Index(name, "/")
+	if slash < 0 || !strings.Contains(name[:slash], ".") {
+		return "", name
+	}
+	i := strings.LastIndex(name, "/")
+	return name[:i+1], name[i+1:]
+}
+
+// changeVersionStr returns the version portion of a change for terminal
+// display, mirroring the logic in Change.String() but without the name.
+func changeVersionStr(c manifest.Change) string {
+	old, newV := c.OldSpec, c.NewSpec
+	if c.OldResolved != "" && c.NewResolved != "" {
+		old, newV = c.OldResolved, c.NewResolved
+	}
+	suffix := ""
+	if c.Section != manifest.Dependencies {
+		suffix = " (" + string(c.Section) + ")"
+	}
+	switch c.Kind {
+	case manifest.Added:
+		if c.NewResolved != "" {
+			newV = c.NewResolved
+		}
+		return newV + " (added)" + suffix
+	case manifest.Removed:
+		if c.OldResolved != "" {
+			old = c.OldResolved
+		}
+		return old + " (removed)" + suffix
+	default:
+		return old + " -> " + newV + suffix
 	}
 }
 

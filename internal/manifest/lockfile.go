@@ -33,17 +33,27 @@ func ParsePackageLock(data []byte) (Resolved, error) {
 	switch {
 	case lock.Packages != nil: // lockfile v2/v3
 		for path, raw := range lock.Packages {
-			name, ok := topLevelModuleName(path)
-			if !ok {
-				continue
-			}
 			var entry struct {
+				Name    string `json:"name"`
 				Version string `json:"version"`
 			}
 			if err := json.Unmarshal(raw, &entry); err != nil {
 				return nil, fmt.Errorf("parse package-lock.json: entry %q: %w", path, err)
 			}
-			if entry.Version != "" {
+			if entry.Version == "" {
+				continue
+			}
+			name, ok := topLevelModuleName(path)
+			if !ok {
+				// Non-node_modules/ path: a linked file: package target whose
+				// version lives here rather than in the link entry. Use the
+				// explicit name field to identify it.
+				if entry.Name == "" {
+					continue
+				}
+				name = entry.Name
+			}
+			if _, exists := out[name]; !exists {
 				out[name] = entry.Version
 			}
 		}

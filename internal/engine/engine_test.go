@@ -1468,3 +1468,304 @@ func TestRunPMOverrideWinsOverDetection(t *testing.T) {
 		t.Errorf("minimal = %v, want [beta]", minimalNames(res))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// validateCheckpoint — direct unit tests for every rejection condition.
+//
+// These complement TestRunResumeRejectsMismatchedCheckpoint, which exercises
+// one mismatch case through the full engine. Direct tests here pin each
+// individual guard so that silently removing or weakening a check will break
+// a specific, named test rather than a subtle integration failure.
+// ---------------------------------------------------------------------------
+
+// goodFP returns a fingerprint that validateCheckpoint will accept when paired
+// with goodCP. Mutate one field at a time to test each rejection condition.
+func goodFP() CheckpointFingerprint {
+	return CheckpointFingerprint{
+		BaseSHA:               "abc123",
+		ToSHA:                 "def456",
+		PackageManager:        "npm",
+		PackageManagerVersion: "npm 10.0.0",
+		Command:               []string{"npm", "test"},
+		Runs:                  1,
+		Changes:               []string{"dependencies:alpha", "dependencies:beta"},
+		Context:               "run-timeout=0s",
+	}
+}
+
+// goodCP returns a checkpoint that passes validateCheckpoint against goodFP().
+func goodCP() *Checkpoint {
+	fp := goodFP()
+	return &Checkpoint{
+		SchemaVersion: CheckpointSchemaVersion,
+		Fingerprint:   fp,
+		StartedAt:     time.Now(),
+	}
+}
+
+func TestValidateCheckpointNilIsRejected(t *testing.T) {
+	if err := validateCheckpoint(nil, goodFP()); err == nil {
+		t.Fatal("validateCheckpoint(nil, ...) returned nil; want error")
+	}
+}
+
+func TestValidateCheckpointSchemaVersionMismatch(t *testing.T) {
+	for _, version := range []int{0, CheckpointSchemaVersion - 1, CheckpointSchemaVersion + 1, 99} {
+		cp := goodCP()
+		cp.SchemaVersion = version
+		err := validateCheckpoint(cp, goodFP())
+		if err == nil {
+			t.Errorf("schema version %d: want error, got nil", version)
+		} else if !strings.Contains(err.Error(), "schema version") {
+			t.Errorf("schema version %d: error = %q, want 'schema version'", version, err)
+		}
+	}
+}
+
+// TestValidateCheckpointFingerprintMismatch verifies that every field of the
+// fingerprint is independently checked. Removing any one comparison from
+// checkpointFingerprintsEqual would leave a test failing here rather than
+// silently allowing a mismatched resume.
+func TestValidateCheckpointFingerprintMismatch(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*CheckpointFingerprint)
+	}{
+		{"BaseSHA", func(f *CheckpointFingerprint) { f.BaseSHA = "000000" }},
+		{"ToSHA", func(f *CheckpointFingerprint) { f.ToSHA = "000000" }},
+		{"PackageManager", func(f *CheckpointFingerprint) { f.PackageManager = "pnpm" }},
+		{"PackageManagerVersion", func(f *CheckpointFingerprint) { f.PackageManagerVersion = "npm 9.0.0" }},
+		{"Runs", func(f *CheckpointFingerprint) { f.Runs++ }},
+		{"Context", func(f *CheckpointFingerprint) { f.Context = "run-timeout=30s" }},
+		// Command: extra element (length change)
+		{"Command extra element", func(f *CheckpointFingerprint) { f.Command = append(f.Command, "--coverage") }},
+		// Command: same length, different content — exercises equalStrings element comparison
+		{"Command different content", func(f *CheckpointFingerprint) { f.Command = []string{"npm", "build"} }},
+		// Changes: extra element
+		{"Changes extra element", func(f *CheckpointFingerprint) {
+			f.Changes = append(f.Changes, "dependencies:gamma")
+		}},
+		// Changes: same length, different content — exercises equalStrings element comparison
+		{"Changes different content", func(f *CheckpointFingerprint) {
+			f.Changes = []string{"dependencies:alpha", "dependencies:DIFFERENT"}
+		}},
+		// Changes: same elements, different order — fingerprint comparison is order-sensitive
+		{"Changes reordered", func(f *CheckpointFingerprint) {
+			f.Changes = []string{"dependencies:beta", "dependencies:alpha"}
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cp := goodCP()
+			want := goodFP()
+			tc.mutate(&cp.Fingerprint) // checkpoint has the "old" fingerprint
+			err := validateCheckpoint(cp, want)
+			if err == nil {
+				t.Fatalf("fingerprint field %q: validateCheckpoint returned nil; want mismatch error", tc.name)
+			}
+			if !strings.Contains(err.Error(), "does not match") {
+				t.Errorf("fingerprint field %q: error = %q, want 'does not match'", tc.name, err)
+			}
+		})
+	}
+}
+
+func TestValidateCheckpointZeroStartTime(t *testing.T) {
+	cp := goodCP()
+	cp.StartedAt = time.Time{} // zero value
+	err := validateCheckpoint(cp, goodFP())
+	if err == nil {
+		t.Fatal("zero StartedAt: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "start time") {
+		t.Errorf("error = %q, want 'start time'", err)
+	}
+}
+
+// TestValidateCheckpointInvalidTrialOutcome verifies that only the three
+// defined outcomes ("pass", "fail", "unresolved") are accepted. An unknown
+// outcome string indicates file corruption or a version mismatch and must
+// not be silently skipped; the engine would miscount verdicts.
+func TestValidateCheckpointInvalidTrialOutcome(t *testing.T) {
+	fp := goodFP()
+	invalidOutcomes := []string{"", "error", "skip", "PASS", "FAIL", "unknown"}
+	for _, outcome := range invalidOutcomes {
+		t.Run(outcome, func(t *testing.T) {
+			cp := goodCP()
+			cp.Trials = []Trial{
+				{Role: "candidate", Applied: []string{"dependencies:alpha"}, Outcome: outcome},
+			}
+			err := validateCheckpoint(cp, fp)
+			if err == nil {
+				t.Fatalf("outcome %q: want error, got nil", outcome)
+			}
+			if !strings.Contains(err.Error(), "invalid outcome") {
+				t.Errorf("outcome %q: error = %q, want 'invalid outcome'", outcome, err)
+			}
+		})
+	}
+
+	// Confirm all three valid outcomes are accepted so we don't over-restrict.
+	for _, outcome := range []string{"pass", "fail", "unresolved"} {
+		t.Run("valid/"+outcome, func(t *testing.T) {
+			cp := goodCP()
+			cp.Trials = []Trial{
+				{Role: "candidate", Applied: []string{"dependencies:alpha"}, Outcome: outcome},
+			}
+			if err := validateCheckpoint(cp, fp); err != nil {
+				t.Errorf("outcome %q should be valid, got error: %v", outcome, err)
+			}
+		})
+	}
+}
+
+// TestValidateCheckpointTrialUnknownChange verifies that a trial whose Applied
+// list references a change ID not in the fingerprint's Changes is rejected.
+// This catches a checkpoint written for a different dependency graph being
+// applied to the current run, which would silently skip or double-apply changes.
+func TestValidateCheckpointTrialUnknownChange(t *testing.T) {
+	fp := goodFP() // Changes = ["dependencies:alpha", "dependencies:beta"]
+	cp := goodCP()
+	cp.Trials = []Trial{
+		{
+			Role:    "candidate",
+			Applied: []string{"dependencies:alpha", "dependencies:UNKNOWN"},
+			Outcome: "fail",
+		},
+	}
+	err := validateCheckpoint(cp, fp)
+	if err == nil {
+		t.Fatal("unknown change in Applied: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown change") {
+		t.Errorf("error = %q, want 'unknown change'", err)
+	}
+}
+
+// TestValidateCheckpointDuplicateTrialSubset verifies that two trials with
+// identical Applied sets are rejected. Duplicate subsets corrupt the memo
+// table: the engine would skip re-evaluating combinations it hasn't actually
+// tested yet, potentially returning a wrong minimal set.
+func TestValidateCheckpointDuplicateTrialSubset(t *testing.T) {
+	fp := goodFP()
+
+	t.Run("same Applied slice", func(t *testing.T) {
+		cp := goodCP()
+		cp.Trials = []Trial{
+			{Role: "candidate", Applied: []string{"dependencies:alpha"}, Outcome: "fail"},
+			{Role: "candidate", Applied: []string{"dependencies:alpha"}, Outcome: "pass"},
+		}
+		err := validateCheckpoint(cp, fp)
+		if err == nil {
+			t.Fatal("duplicate Applied: want error, got nil")
+		}
+		if !strings.Contains(err.Error(), "duplicate trial subset") {
+			t.Errorf("error = %q, want 'duplicate trial subset'", err)
+		}
+	})
+
+	// subsetKeyIDs sorts before hashing, so Applied=["b","a"] and Applied=["a","b"]
+	// are the same subset and must also be rejected.
+	t.Run("same elements different order", func(t *testing.T) {
+		cp := goodCP()
+		cp.Trials = []Trial{
+			{Role: "candidate", Applied: []string{"dependencies:alpha", "dependencies:beta"}, Outcome: "fail"},
+			{Role: "candidate", Applied: []string{"dependencies:beta", "dependencies:alpha"}, Outcome: "pass"},
+		}
+		err := validateCheckpoint(cp, fp)
+		if err == nil {
+			t.Fatal("reordered Applied that is the same subset: want duplicate error, got nil")
+		}
+		if !strings.Contains(err.Error(), "duplicate trial subset") {
+			t.Errorf("error = %q, want 'duplicate trial subset'", err)
+		}
+	})
+}
+
+// TestValidateCheckpointHappyPath confirms that well-formed checkpoints with
+// zero or more trials pass without error. These are the steady-state cases
+// that the engine relies on during every --resume run.
+func TestValidateCheckpointHappyPath(t *testing.T) {
+	fp := goodFP()
+
+	t.Run("no trials", func(t *testing.T) {
+		if err := validateCheckpoint(goodCP(), fp); err != nil {
+			t.Fatalf("valid checkpoint with no trials: %v", err)
+		}
+	})
+
+	t.Run("baseline and candidate trials", func(t *testing.T) {
+		cp := goodCP()
+		cp.Trials = []Trial{
+			// baseline-old: no changes applied, represented as nil Applied
+			{Role: "baseline-old", Applied: nil, Outcome: "pass"},
+			// baseline-new: all changes applied
+			{Role: "baseline-new", Applied: []string{"dependencies:alpha", "dependencies:beta"}, Outcome: "fail"},
+			// candidate: a proper subset
+			{Role: "candidate", Applied: []string{"dependencies:alpha"}, Outcome: "fail"},
+		}
+		if err := validateCheckpoint(cp, fp); err != nil {
+			t.Fatalf("valid checkpoint with trials: %v", err)
+		}
+	})
+
+	t.Run("unresolved trial is valid", func(t *testing.T) {
+		cp := goodCP()
+		cp.Trials = []Trial{
+			{Role: "candidate", Applied: []string{"dependencies:alpha"}, Outcome: "unresolved"},
+		}
+		if err := validateCheckpoint(cp, fp); err != nil {
+			t.Fatalf("unresolved outcome should be accepted: %v", err)
+		}
+	})
+}
+
+// TestValidateCheckpointTrialIndexInError confirms that the error message
+// identifies which trial number failed. Without a clear index the user cannot
+// tell which record is corrupt when inspecting a checkpoint file manually.
+func TestValidateCheckpointTrialIndexInError(t *testing.T) {
+	fp := goodFP()
+	cp := goodCP()
+	cp.Trials = []Trial{
+		{Role: "candidate", Applied: []string{"dependencies:alpha"}, Outcome: "pass"},
+		{Role: "candidate", Applied: []string{"dependencies:beta"}, Outcome: "pass"},
+		{Role: "candidate", Applied: []string{"dependencies:alpha", "dependencies:beta"}, Outcome: "INVALID"},
+	}
+	err := validateCheckpoint(cp, fp)
+	if err == nil {
+		t.Fatal("want error for invalid outcome on trial 3")
+	}
+	if !strings.Contains(err.Error(), "3") {
+		t.Errorf("error %q should identify trial 3 by index", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// equalStrings — covers the element-comparison branch (same length, content differs)
+// ---------------------------------------------------------------------------
+
+func TestEqualStrings(t *testing.T) {
+	cases := []struct {
+		a, b []string
+		want bool
+	}{
+		{nil, nil, true},
+		{[]string{}, []string{}, true},
+		{nil, []string{}, true}, // nil and empty have identical length (0) and no elements
+		{[]string{"x"}, []string{"x"}, true},
+		{[]string{"a", "b"}, []string{"a", "b"}, true},
+		// Length mismatch
+		{[]string{"a"}, []string{"a", "b"}, false},
+		{[]string{"a", "b"}, []string{"a"}, false},
+		// Same length, different element — this is the branch that was uncovered
+		{[]string{"a"}, []string{"b"}, false},
+		{[]string{"a", "b"}, []string{"a", "X"}, false},
+		{[]string{"a", "b"}, []string{"X", "b"}, false},
+	}
+	for _, tc := range cases {
+		if got := equalStrings(tc.a, tc.b); got != tc.want {
+			t.Errorf("equalStrings(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
