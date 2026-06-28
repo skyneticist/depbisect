@@ -319,3 +319,320 @@ func TestNotARepo(t *testing.T) {
 		t.Fatal("expected error outside a repository")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Error-path coverage using execx.Fake — no real git repo required.
+//
+// Every git.Run call has two error branches: (1) the runner itself returns a
+// non-nil error (binary not found, context cancelled, etc.) and (2) the
+// command exits with a non-zero code. The integration tests above exercise
+// the happy paths against a real repository; the tests below pin the error
+// paths so that removing or mis-routing an error return is caught immediately.
+// ---------------------------------------------------------------------------
+
+// fakeGit constructs a Git bound to a scriptable fake runner. dir is
+// arbitrary; it is only embedded in error messages, not used for real I/O.
+func fakeGit(runner *execx.Fake) *Git {
+	return New(runner, "/fake/repo")
+}
+
+// errRunner returns a Fake whose every call fails with the given error.
+func errRunner(err error) *execx.Fake {
+	f := execx.NewFake()
+	f.Default = execx.Response{Err: err}
+	return f
+}
+
+// exitRunner returns a Fake whose every call exits with code 1 and the
+// given stderr text.
+func exitRunner(stderr string) *execx.Fake {
+	f := execx.NewFake()
+	f.Default = execx.Response{Result: execx.Result{ExitCode: 1, Stderr: []byte(stderr)}}
+	return f
+}
+
+// stubArgs stubs any command whose first arg matches first with resp.
+func stubArgs(f *execx.Fake, first string, resp execx.Response) {
+	f.Stub(func(c execx.Cmd) bool {
+		return len(c.Args) > 0 && c.Args[0] == first
+	}, resp)
+}
+
+// TestRunnerErrorPropagates verifies that when the underlying runner returns a
+// non-nil error (e.g. context cancellation, binary not found), each Git method
+// wraps and surfaces it rather than returning nil or swallowing the message.
+func TestRunnerErrorPropagates(t *testing.T) {
+	ctx := context.Background()
+	execErr := errors.New("runner: exec failed")
+	g := fakeGit(errRunner(execErr))
+
+	cases := []struct {
+		name string
+		call func() error
+	}{
+		{"ResolveRev", func() error {
+			_, err := g.ResolveRev(ctx, "HEAD")
+			return err
+		}},
+		{"FileExists via blobRef", func() error {
+			_, err := g.FileExists(ctx, "HEAD", "package.json")
+			return err
+		}},
+		{"ShowFile via blobRef", func() error {
+			_, err := g.ShowFile(ctx, "HEAD", "package.json")
+			return err
+		}},
+		{"AddWorktree", func() error {
+			return g.AddWorktree(ctx, "/wt", "HEAD")
+		}},
+		{"RemoveWorktree", func() error {
+			return g.RemoveWorktree(ctx, "/wt")
+		}},
+		{"PruneWorktrees", func() error {
+			return g.PruneWorktrees(ctx)
+		}},
+		{"IsPathDirty", func() error {
+			_, err := g.IsPathDirty(ctx, "package.json")
+			return err
+		}},
+		{"ResetWorktree", func() error {
+			return g.ResetWorktree(ctx, "/wt", "HEAD")
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call()
+			if err == nil {
+				t.Fatalf("%s: got nil error on runner failure, want non-nil", tc.name)
+			}
+			if !errors.Is(err, execErr) {
+				t.Errorf("%s: err = %v; want errors.Is(err, execErr) to be true (error must be wrapped, not swallowed)", tc.name, err)
+			}
+		})
+	}
+}
+
+// TestNonZeroExitCodePropagates verifies that a git command that exits with a
+// non-zero code produces an error whose message names the operation and
+// includes the stderr output. Without the stderr, the user sees no hint about
+// why git refused.
+func TestNonZeroExitCodePropagates(t *testing.T) {
+	ctx := context.Background()
+
+	cases := []struct {
+		name    string
+		runner  *execx.Fake
+		call    func(*Git) error
+		wantMsg string // substring expected in the error message
+	}{
+		{
+			name:   "RemoveWorktree",
+			runner: exitRunner("worktree is locked"),
+			call: func(g *Git) error {
+				return g.RemoveWorktree(ctx, "/wt")
+			},
+			wantMsg: "remove worktree",
+		},
+		{
+			name:   "RemoveWorktree stderr included",
+			runner: exitRunner("worktree is locked"),
+			call: func(g *Git) error {
+				return g.RemoveWorktree(ctx, "/wt")
+			},
+			wantMsg: "worktree is locked",
+		},
+		{
+			name:   "PruneWorktrees",
+			runner: exitRunner("cannot prune"),
+			call: func(g *Git) error {
+				return g.PruneWorktrees(ctx)
+			},
+			wantMsg: "prune worktrees",
+		},
+		{
+			name:   "IsPathDirty",
+			runner: exitRunner("not a git repo"),
+			call: func(g *Git) error {
+				_, err := g.IsPathDirty(ctx, "package.json")
+				return err
+			},
+			wantMsg: "check status",
+		},
+		{
+			name:   "IsPathDirty stderr included",
+			runner: exitRunner("not a git repo"),
+			call: func(g *Git) error {
+				_, err := g.IsPathDirty(ctx, "package.json")
+				return err
+			},
+			wantMsg: "not a git repo",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := fakeGit(tc.runner)
+			err := tc.call(g)
+			if err == nil {
+				t.Fatalf("%s: got nil error on exit code 1, want non-nil", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("%s: err = %q, want substring %q", tc.name, err, tc.wantMsg)
+			}
+		})
+	}
+}
+
+// TestResetWorktreeErrorPaths covers all four error branches in ResetWorktree:
+// the "git reset --hard" runner error, its non-zero exit, the "git clean"
+// runner error, and its non-zero exit. The two reset branches and two clean
+// branches are staged independently so each is isolated.
+func TestResetWorktreeErrorPaths(t *testing.T) {
+	ctx := context.Background()
+	resetErr := errors.New("reset: exec failed")
+	cleanErr := errors.New("clean: exec failed")
+
+	successReset := execx.Response{Result: execx.Result{ExitCode: 0}}
+
+	t.Run("reset runner error", func(t *testing.T) {
+		f := errRunner(resetErr)
+		err := fakeGit(f).ResetWorktree(ctx, "/wt", "HEAD")
+		if err == nil {
+			t.Fatal("want error, got nil")
+		}
+		if !errors.Is(err, resetErr) {
+			t.Errorf("err = %v; want errors.Is(err, resetErr)", err)
+		}
+		if !strings.Contains(err.Error(), "reset worktree") {
+			t.Errorf("err = %q, want 'reset worktree'", err)
+		}
+	})
+
+	t.Run("reset non-zero exit includes stderr", func(t *testing.T) {
+		f := exitRunner("not a git repository")
+		err := fakeGit(f).ResetWorktree(ctx, "/wt", "HEAD")
+		if err == nil {
+			t.Fatal("want error, got nil")
+		}
+		if !strings.Contains(err.Error(), "reset worktree") {
+			t.Errorf("err = %q, want 'reset worktree'", err)
+		}
+		if !strings.Contains(err.Error(), "not a git repository") {
+			t.Errorf("err = %q, want stderr 'not a git repository'", err)
+		}
+	})
+
+	t.Run("clean runner error", func(t *testing.T) {
+		f := errRunner(cleanErr)
+		stubArgs(f, "reset", successReset) // reset succeeds; clean fails
+		err := fakeGit(f).ResetWorktree(ctx, "/wt", "HEAD")
+		if err == nil {
+			t.Fatal("want error, got nil")
+		}
+		if !errors.Is(err, cleanErr) {
+			t.Errorf("err = %v; want errors.Is(err, cleanErr)", err)
+		}
+		if !strings.Contains(err.Error(), "clean worktree") {
+			t.Errorf("err = %q, want 'clean worktree'", err)
+		}
+	})
+
+	t.Run("clean non-zero exit includes stderr", func(t *testing.T) {
+		f := exitRunner("clean refused")
+		stubArgs(f, "reset", successReset) // reset succeeds; clean exits 1
+		err := fakeGit(f).ResetWorktree(ctx, "/wt", "HEAD")
+		if err == nil {
+			t.Fatal("want error, got nil")
+		}
+		if !strings.Contains(err.Error(), "clean worktree") {
+			t.Errorf("err = %q, want 'clean worktree'", err)
+		}
+		if !strings.Contains(err.Error(), "clean refused") {
+			t.Errorf("err = %q, want stderr 'clean refused'", err)
+		}
+	})
+}
+
+// TestShowFileCatFileErrors covers the two error branches that only fire once
+// blobRef has successfully resolved the path to a blob hash. Both require
+// staging the rev-parse call to succeed while cat-file then fails.
+func TestShowFileCatFileErrors(t *testing.T) {
+	ctx := context.Background()
+	blobHash := "deadbeef1234deadbeef1234deadbeef12345678"
+
+	// revParseSucceeds returns a fake that makes the rev-parse call return a
+	// real-looking blob hash so blobRef succeeds and ShowFile reaches cat-file.
+	revParseSucceeds := func() *execx.Fake {
+		f := execx.NewFake()
+		stubArgs(f, "rev-parse", execx.Response{
+			Result: execx.Result{Stdout: []byte(blobHash + "\n")},
+		})
+		return f
+	}
+
+	t.Run("cat-file runner error", func(t *testing.T) {
+		catErr := errors.New("cat-file: exec failed")
+		f := revParseSucceeds()
+		f.Default = execx.Response{Err: catErr}
+
+		_, err := fakeGit(f).ShowFile(ctx, "HEAD", "package.json")
+		if err == nil {
+			t.Fatal("want error, got nil")
+		}
+		if !errors.Is(err, catErr) {
+			t.Errorf("err = %v; want errors.Is(err, catErr)", err)
+		}
+		if !strings.Contains(err.Error(), "read package.json") {
+			t.Errorf("err = %q, want 'read package.json'", err)
+		}
+	})
+
+	t.Run("cat-file non-zero exit includes stderr", func(t *testing.T) {
+		f := revParseSucceeds()
+		f.Default = execx.Response{
+			Result: execx.Result{ExitCode: 128, Stderr: []byte("not a valid object\n")},
+		}
+
+		_, err := fakeGit(f).ShowFile(ctx, "HEAD", "package.json")
+		if err == nil {
+			t.Fatal("want error, got nil")
+		}
+		if !strings.Contains(err.Error(), "read package.json") {
+			t.Errorf("err = %q, want 'read package.json'", err)
+		}
+		if !strings.Contains(err.Error(), "not a valid object") {
+			t.Errorf("err = %q, want stderr in message", err)
+		}
+	})
+}
+
+// TestContextCancellationPropagates verifies that a cancelled context causes
+// each Git method to return a context.Canceled-wrapped error rather than
+// blocking or returning nil. Context cancellation is the primary real-world
+// trigger for the runner-error branches exercised in TestRunnerErrorPropagates.
+func TestContextCancellationPropagates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before any call
+
+	g := fakeGit(execx.NewFake()) // Fake checks ctx.Err() before executing
+
+	calls := []struct {
+		name string
+		call func() error
+	}{
+		{"ResolveRev", func() error { _, err := g.ResolveRev(ctx, "HEAD"); return err }},
+		{"RemoveWorktree", func() error { return g.RemoveWorktree(ctx, "/wt") }},
+		{"PruneWorktrees", func() error { return g.PruneWorktrees(ctx) }},
+		{"IsPathDirty", func() error { _, err := g.IsPathDirty(ctx, "pkg"); return err }},
+		{"ResetWorktree", func() error { return g.ResetWorktree(ctx, "/wt", "HEAD") }},
+	}
+	for _, tc := range calls {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call()
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("%s: err = %v; want errors.Is(err, context.Canceled)", tc.name, err)
+			}
+		})
+	}
+}
