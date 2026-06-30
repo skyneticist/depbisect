@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/skyneticist/depbisect/internal/checkpoint"
@@ -52,7 +53,8 @@ preserved exactly; no shell is involved. Wrap it yourself if you need shell
 features: depbisect run --base main -- sh -c 'npm test 2>&1 | grep -v warn'
 
 Flags for run:
-  --base <rev>          base revision to compare against (required)
+  --base <rev>          base revision to compare against (required; omit it
+                        to list recent dependency-changing commits to pick from)
   --to <rev>            target revision (default "HEAD")
   --repo <path>         repository to operate on (default ".")
   --runs <n>            verification runs per candidate; raises confidence
@@ -139,8 +141,19 @@ type runOptions struct {
 	command        []string
 }
 
-// parseRunArgs splits args at the first "--": flags before it, the
-// verification command after it.
+// These sentinels mark the two recoverable "you're almost there" mistakes.
+// Both are returned alongside a populated *runOptions so the caller can render
+// guidance — a candidate --base list and a copy-pasteable command — rather than
+// a bare error.
+var (
+	errBaseRequired     = errors.New("--base is required")
+	errMissingSeparator = errors.New(`missing "--" separator before the command`)
+)
+
+// parseRunArgs splits args at the first "--": flags before it, the verification
+// command after it. When the separator is absent the leftover tokens are still
+// returned as the intended command (via errMissingSeparator) so the caller can
+// show the corrected form.
 func parseRunArgs(args []string) (*runOptions, error) {
 	sep := -1
 	for i, a := range args {
@@ -149,10 +162,12 @@ func parseRunArgs(args []string) (*runOptions, error) {
 			break
 		}
 	}
-	if sep == -1 {
-		return nil, errors.New(`missing "--" separator: depbisect run --base <rev> -- <command>`)
+	hasSep := sep != -1
+	flagArgs := args
+	var command []string
+	if hasSep {
+		flagArgs, command = args[:sep], args[sep+1:]
 	}
-	flagArgs, command := args[:sep], args[sep+1:]
 
 	opts := &runOptions{}
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
@@ -193,11 +208,22 @@ func parseRunArgs(args []string) (*runOptions, error) {
 		return nil, err
 	}
 	opts.style = style
-	if extra := fs.Args(); len(extra) > 0 {
+
+	extra := fs.Args()
+	if !hasSep {
+		// No "--": whatever the flag parser stopped at is a command the user
+		// forgot to separate. Hand it back so the caller can show the fix (and,
+		// if --base is also missing, suggest one) using the real command.
+		opts.command = extra
+		return opts, errMissingSeparator
+	}
+	if len(extra) > 0 {
 		return nil, fmt.Errorf("unexpected argument %q before %q (the verification command goes after the separator)", extra[0], "--")
 	}
+	opts.command = command
+
 	if opts.base == "" {
-		return nil, errors.New("--base is required")
+		return opts, errBaseRequired
 	}
 	if opts.runs < 1 {
 		return nil, errors.New("--runs must be at least 1")
@@ -223,7 +249,6 @@ func parseRunArgs(args []string) (*runOptions, error) {
 	if len(command) == 0 {
 		return nil, errors.New("no verification command given after \"--\"")
 	}
-	opts.command = command
 	return opts, nil
 }
 
@@ -232,8 +257,15 @@ func parseRunArgs(args []string) (*runOptions, error) {
 func runMain(args []string, stdout, stderr io.Writer, version string) int {
 	opts, err := parseRunArgs(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "depbisect: %v\nRun \"depbisect help\" for usage.\n", err)
-		return ExitError
+		switch {
+		case errors.Is(err, errMissingSeparator):
+			return runGuidance(opts, true, stderr)
+		case errors.Is(err, errBaseRequired):
+			return runGuidance(opts, false, stderr)
+		default:
+			fmt.Fprintf(stderr, "depbisect: %v\nRun \"depbisect help\" for usage.\n", err)
+			return ExitError
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), terminationSignals()...)
@@ -308,10 +340,13 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 		} else {
 			fmt.Fprintf(stderr, "depbisect: %v", err)
 		}
-		if checkpointStore != nil {
+		if checkpointStore != nil && checkpointHasTrials(checkpointStore) {
 			fmt.Fprintf(stderr, "; completed trials remain in %s (resume with --resume)", opts.checkpoint)
 		}
 		fmt.Fprintln(stderr)
+		if hint := errorHint(err, opts); hint != "" {
+			fmt.Fprintf(stderr, "  hint: %s\n", hint)
+		}
 		return ExitError
 	}
 
@@ -336,6 +371,119 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 
 	printSummary(stdout, res, mdPath, jsonPath, opts.style)
 	return exitCodeFor(res.Outcome)
+}
+
+// suggestBase handles an omitted --base by listing recent commits that changed
+// dependency manifests or lockfiles, so the user can pick the last one that
+// runGuidance handles the two recoverable mistakes — a missing "--" separator
+// and/or a missing --base — with one coherent message: what to fix, a list of
+// candidate base revisions when one is needed, and a copy-pasteable command. It
+// always returns ExitError; the bisection has not run.
+func runGuidance(opts *runOptions, missingSeparator bool, stderr io.Writer) int {
+	switch {
+	case missingSeparator && opts.base == "":
+		fmt.Fprintln(stderr, `depbisect: the command needs a "--" separator before it and a --base revision.`)
+	case missingSeparator:
+		fmt.Fprintln(stderr, `depbisect: the verification command must come after a "--" separator.`)
+	default: // base missing, separator present
+		fmt.Fprintln(stderr, "depbisect: --base is required — it marks the last revision you know was healthy.")
+	}
+
+	exampleBase := opts.base
+	if opts.base == "" {
+		base, ok := suggestBaseRevisions(opts, stderr)
+		if !ok {
+			// The repository could not be inspected; the hint already explains
+			// what to do, and there is no meaningful command to suggest.
+			return ExitError
+		}
+		exampleBase = base
+	}
+
+	fmt.Fprintf(stderr, "\nThen run:\n  depbisect run --base %s -- %s\n",
+		orPlaceholder(exampleBase, "<rev>"), exampleCommand(opts.command))
+	return ExitError
+}
+
+// suggestBaseRevisions lists recent commits that changed dependency manifests
+// or lockfiles and returns the oldest shown as a safe example --base. ok is
+// false only when the repository cannot be inspected at all (already reported
+// with a hint); an empty base with ok=true means the repo is fine but has no
+// dependency history to suggest from.
+func suggestBaseRevisions(opts *runOptions, stderr io.Writer) (base string, ok bool) {
+	ctx := context.Background()
+	git := gitx.New(execx.Local{}, opts.repo)
+
+	// Anchor at --to (default HEAD); resolving it also yields a clean, hinted
+	// error when the repository is empty or missing.
+	toSHA, err := git.ResolveRev(ctx, opts.to)
+	if err != nil {
+		fmt.Fprintf(stderr, "depbisect: could not inspect %s to suggest a base: %v\n", opts.to, err)
+		if hint := errorHint(err, opts); hint != "" {
+			fmt.Fprintf(stderr, "  hint: %s\n", hint)
+		}
+		return "", false
+	}
+
+	commits, err := git.RecentCommitsTouching(ctx, toSHA, pm.DependencyFiles(), 8)
+	if err != nil || len(commits) == 0 {
+		fmt.Fprintln(stderr, "\nNo dependency changes found in recent history; pick any earlier commit as --base.")
+		return "", true
+	}
+
+	fmt.Fprintln(stderr, "\nRecent commits that changed dependencies (pick the last one that worked):")
+	for _, c := range commits {
+		fmt.Fprintf(stderr, "  %s  %s  %s\n", c.ShortSHA, c.Date, truncateText(c.Subject, 60))
+	}
+	// The oldest commit shown gives the widest range and is the safest example.
+	return commits[len(commits)-1].ShortSHA, true
+}
+
+// exampleCommand renders the user's command for the example line, or a
+// placeholder when there is none or a token looks like a flag — in which case
+// we cannot safely tell where the command begins without a separator.
+func exampleCommand(command []string) string {
+	if len(command) == 0 {
+		return "<command>"
+	}
+	for _, tok := range command {
+		if strings.HasPrefix(tok, "-") {
+			return "<command>"
+		}
+	}
+	return strings.Join(command, " ")
+}
+
+// orPlaceholder returns s, or placeholder when s is empty.
+func orPlaceholder(s, placeholder string) string {
+	if s == "" {
+		return placeholder
+	}
+	return s
+}
+
+// errorHint returns a short, actionable suggestion for the most common
+// failure modes, or "" when nothing useful can be added. Hints are advisory:
+// the primary error is always printed first.
+func errorHint(err error, opts *runOptions) string {
+	switch {
+	case errors.Is(err, gitx.ErrNotARepo):
+		return "run depbisect from inside a git repository, or point it at one with --repo <path>."
+	case errors.Is(err, gitx.ErrNoCommits):
+		return "make at least one commit first — depbisect bisects the history between two commits."
+	case errors.Is(err, gitx.ErrNoSuchCommit):
+		return fmt.Sprintf("check the revision exists with `git -C %s rev-parse <rev>`; note --base HEAD~1 needs at least two commits.", opts.repo)
+	}
+	return ""
+}
+
+// checkpointHasTrials reports whether the checkpoint holds at least one
+// completed trial worth resuming. A run that fails before any trial completes
+// (e.g. an unresolvable revision) leaves nothing to resume, so suggesting
+// --resume in that case is just noise.
+func checkpointHasTrials(store engine.CheckpointStore) bool {
+	cp, err := store.Load()
+	return err == nil && cp != nil && len(cp.Trials) > 0
 }
 
 func writeJSONReport(rep *report.Report, path string) error {

@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/skyneticist/depbisect/internal/execx"
@@ -16,6 +17,20 @@ import (
 
 // ErrNotExist reports that a file does not exist at the requested revision.
 var ErrNotExist = errors.New("file does not exist at revision")
+
+// Revision-resolution failures are exported as sentinels so callers can
+// recognize the common first-run mistakes and attach actionable guidance.
+var (
+	// ErrNoCommits reports that the repository exists but has no commits yet,
+	// so no revision can resolve.
+	ErrNoCommits = errors.New("repository has no commits yet")
+	// ErrNoSuchCommit reports that a revision expression names no commit in the
+	// repository (a typo, or history that does not reach back that far).
+	ErrNoSuchCommit = errors.New("no such commit in this repository")
+	// ErrNotARepo reports that the working directory is not inside a git
+	// repository.
+	ErrNotARepo = errors.New("not a git repository")
+)
 
 // Git runs git commands against one repository.
 type Git struct {
@@ -60,10 +75,80 @@ func (g *Git) ResolveRev(ctx context.Context, rev string) (string, error) {
 		return "", fmt.Errorf("resolve revision %q: %w", rev, err)
 	}
 	if res.ExitCode != 0 {
-		return "", fmt.Errorf("resolve revision %q: not a valid commit in this repository (%s)",
-			rev, firstLine(res.Stderr))
+		// With --verify --quiet, git signals an unknown revision by exit code
+		// alone and writes nothing to stderr. A non-empty stderr means a
+		// different failure worth surfacing; the most common is operating
+		// outside a repository at all.
+		if stderr := strings.TrimSpace(string(res.Stderr)); stderr != "" {
+			if strings.Contains(stderr, "not a git repository") {
+				return "", fmt.Errorf("resolve revision %q: %w", rev, ErrNotARepo)
+			}
+			return "", fmt.Errorf("resolve revision %q: %s", rev, stderr)
+		}
+		// Distinguish the two common silent causes so the message is actionable:
+		// a repository with no commits yet versus a revision that simply does
+		// not exist. If even HEAD will not resolve, there is no history at all.
+		if head, herr := g.run(ctx, "rev-parse", "--verify", "--quiet", "HEAD"); herr == nil && head.ExitCode != 0 {
+			return "", fmt.Errorf("resolve revision %q: %w", rev, ErrNoCommits)
+		}
+		return "", fmt.Errorf("resolve revision %q: %w", rev, ErrNoSuchCommit)
 	}
 	return strings.TrimSpace(string(res.Stdout)), nil
+}
+
+// Commit is a terse description of a commit, used to suggest a --base revision.
+type Commit struct {
+	SHA      string
+	ShortSHA string
+	Date     string // committer date, YYYY-MM-DD
+	Subject  string
+}
+
+// logFieldSep separates the fields of one log record. ASCII unit separator
+// cannot appear in a commit subject, so parsing is unambiguous.
+const logFieldSep = "\x1f"
+
+// RecentCommitsTouching lists up to limit commits, newest first, reachable from
+// rev that modified any of paths. It underpins the --base suggestion: the paths
+// are dependency manifests and lockfiles, so each result is a point where
+// dependencies could have changed.
+func (g *Git) RecentCommitsTouching(ctx context.Context, rev string, paths []string, limit int) ([]Commit, error) {
+	if err := validRev(rev); err != nil {
+		return nil, err
+	}
+	args := []string{
+		"log", rev,
+		"--max-count=" + strconv.Itoa(limit),
+		"--format=%H" + logFieldSep + "%h" + logFieldSep + "%cs" + logFieldSep + "%s",
+		"--",
+	}
+	args = append(args, paths...)
+	res, err := g.run(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list recent commits: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return nil, fmt.Errorf("list recent commits: %s", firstLine(res.Stderr))
+	}
+	return parseCommitLog(res.Stdout), nil
+}
+
+// parseCommitLog decodes the unit-separated records emitted by
+// RecentCommitsTouching. Malformed lines are skipped rather than failing the
+// whole suggestion.
+func parseCommitLog(out []byte) []Commit {
+	var commits []Commit
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		f := strings.SplitN(line, logFieldSep, 4)
+		if len(f) != 4 {
+			continue
+		}
+		commits = append(commits, Commit{SHA: f[0], ShortSHA: f[1], Date: f[2], Subject: f[3]})
+	}
+	return commits
 }
 
 // ShowFile returns the content of path at the given revision. If the file

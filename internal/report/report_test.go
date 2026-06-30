@@ -170,3 +170,115 @@ func TestCommandDisplay(t *testing.T) {
 		}
 	}
 }
+
+func TestNewNilTrialApplied(t *testing.T) {
+	// A nil Applied slice in engine.Trial must become [] in the JSON report,
+	// not null — JSON consumers should not need to handle both forms.
+	res := &engine.Result{
+		Outcome:    engine.OutcomeNotReproduced,
+		StartedAt:  time.Now(),
+		FinishedAt: time.Now(),
+		Trials: []engine.Trial{
+			{Role: "candidate", Applied: nil, Outcome: "pass"},
+		},
+	}
+	r := New(res, "0.0.0")
+	if r.Trials[0].Applied == nil {
+		t.Error("nil Applied must be converted to empty slice to prevent JSON null")
+	}
+	data, err := r.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(`"applied":null`)) {
+		t.Errorf("JSON must not contain null applied array:\n%s", data)
+	}
+}
+
+func TestMarkdownMinimalityNotProven(t *testing.T) {
+	res := fixtureResult()
+	res.MinimalityProven = false
+	md := string(New(res, "1.2.3").Markdown())
+	if !strings.Contains(md, "Best-known failing set (minimality not proven)") {
+		t.Errorf("expected 'Best-known failing set...' heading:\n%s", md)
+	}
+}
+
+func TestMarkdownRunContinuity(t *testing.T) {
+	res := fixtureResult()
+	res.ResumedTrials = 4
+	res.UnresolvedTrials = 1
+	md := string(New(res, "1.2.3").Markdown())
+	if !strings.Contains(md, "## Run continuity") {
+		t.Errorf("expected '## Run continuity' section:\n%s", md)
+	}
+	if !strings.Contains(md, "Resumed trials: 4") {
+		t.Errorf("expected resumed trial count:\n%s", md)
+	}
+	if !strings.Contains(md, "Unresolved trials: 1") {
+		t.Errorf("expected unresolved trial count:\n%s", md)
+	}
+}
+
+func TestMarkdownEmptyChanges(t *testing.T) {
+	res := fixtureResult()
+	res.Changes = nil
+	md := string(New(res, "1.2.3").Markdown())
+	if !strings.Contains(md, "None.") {
+		t.Errorf("expected 'None.' for empty dependency changes:\n%s", md)
+	}
+}
+
+func TestMarkdownKeptWorktree(t *testing.T) {
+	res := fixtureResult()
+	res.KeptWorktree = "/tmp/depbisect-work-abc123"
+	md := string(New(res, "1.2.3").Markdown())
+	if !strings.Contains(md, "Worktree kept at") {
+		t.Errorf("expected worktree-kept line:\n%s", md)
+	}
+	if !strings.Contains(md, "/tmp/depbisect-work-abc123") {
+		t.Errorf("expected worktree path in markdown:\n%s", md)
+	}
+}
+
+func TestAppliedDisplayTruncates(t *testing.T) {
+	many := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	got := appliedDisplay(many)
+	if !strings.Contains(got, "…") {
+		t.Errorf("appliedDisplay long = %q, want ellipsis", got)
+	}
+	if !strings.Contains(got, "(8 total)") {
+		t.Errorf("appliedDisplay long = %q, want total count", got)
+	}
+	for _, name := range many[:6] {
+		if !strings.Contains(got, name) {
+			t.Errorf("appliedDisplay long missing %q: %q", name, got)
+		}
+	}
+}
+
+func TestVersionCell(t *testing.T) {
+	cases := []struct {
+		spec, resolved, want string
+	}{
+		{"", "", "—"},
+		{"^1.0.0", "1.0.3", "^1.0.0 (1.0.3)"},
+		{"^1.0.0", "", "^1.0.0"},
+		{"", "1.0.3", "1.0.3"},
+	}
+	for _, tc := range cases {
+		if got := versionCell(tc.spec, tc.resolved); got != tc.want {
+			t.Errorf("versionCell(%q, %q) = %q, want %q", tc.spec, tc.resolved, got, tc.want)
+		}
+	}
+}
+
+func TestShort(t *testing.T) {
+	if got := short("abc123"); got != "abc123" {
+		t.Errorf("short(%q) = %q, want unchanged (≤12 chars)", "abc123", got)
+	}
+	long := "1111111111111111111111111111111111111111"
+	if got := short(long); got != "111111111111" {
+		t.Errorf("short(40-char SHA) = %q, want first 12 chars", got)
+	}
+}

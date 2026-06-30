@@ -65,8 +65,8 @@ fmt: ## Format all Go source in place.
 	gofmt -w .
 
 .PHONY: fmt-check
-fmt-check: ## Fail if any Go source is not gofmt-clean.
-	@test -z "$$(gofmt -l . | grep -v '^\.cache/')" || { echo "gofmt needed:"; gofmt -l . | grep -v '^\.cache/'; exit 1; }
+fmt-check: ## Fail if any tracked Go source is not gofmt-clean.
+	@bad="$$(gofmt -l $$(git ls-files '*.go'))"; test -z "$$bad" || { echo "gofmt needed:"; echo "$$bad"; exit 1; }
 
 .PHONY: vet
 vet: ## Run go vet.

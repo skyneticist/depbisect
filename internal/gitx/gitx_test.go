@@ -97,6 +97,119 @@ func TestResolveRevInvalid(t *testing.T) {
 	if !strings.Contains(err.Error(), "no-such-rev") {
 		t.Errorf("error %v does not name the revision", err)
 	}
+	// The repository has commits, so the revision is simply missing; the
+	// message must say so rather than blaming an empty repository.
+	if !errors.Is(err, ErrNoSuchCommit) {
+		t.Errorf("error %v should be ErrNoSuchCommit", err)
+	}
+}
+
+// TestResolveRevNoCommits covers the unborn-HEAD path: git refuses with a
+// non-zero exit and empty stderr, which must translate into an actionable
+// "no commits yet" message instead of a cryptic "(no output)".
+func TestResolveRevNoCommits(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	cmd := exec.Command("git", "-C", dir, "init", "-q", "-b", "main")
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	g := newGit(t, dir)
+	_, err := g.ResolveRev(context.Background(), "HEAD")
+	if err == nil {
+		t.Fatal("expected error in a repository with no commits")
+	}
+	if !errors.Is(err, ErrNoCommits) {
+		t.Errorf("error %v should be ErrNoCommits", err)
+	}
+}
+
+func TestRecentCommitsTouching(t *testing.T) {
+	dir, _, _ := initRepo(t)
+	g := newGit(t, dir)
+	ctx := context.Background()
+
+	// Both commits in initRepo modify package.json; newest ("two") first.
+	commits, err := g.RecentCommitsTouching(ctx, "HEAD", []string{"package.json"}, 10)
+	if err != nil {
+		t.Fatalf("RecentCommitsTouching: %v", err)
+	}
+	if len(commits) != 2 {
+		t.Fatalf("got %d commits, want 2: %+v", len(commits), commits)
+	}
+	if commits[0].Subject != "two" || commits[1].Subject != "one" {
+		t.Errorf("subjects = [%q %q], want [two one]", commits[0].Subject, commits[1].Subject)
+	}
+	for _, c := range commits {
+		if c.SHA == "" || c.ShortSHA == "" || c.Date == "" {
+			t.Errorf("commit has empty field: %+v", c)
+		}
+	}
+
+	// The limit caps the result count.
+	if got, _ := g.RecentCommitsTouching(ctx, "HEAD", []string{"package.json"}, 1); len(got) != 1 {
+		t.Errorf("with limit 1 got %d commits, want 1", len(got))
+	}
+
+	// Only the second commit added "extra file.txt".
+	if got, _ := g.RecentCommitsTouching(ctx, "HEAD", []string{"extra file.txt"}, 10); len(got) != 1 {
+		t.Errorf("path filter: got %d commits, want 1", len(got))
+	}
+
+	// A path nothing ever touched yields no commits.
+	if got, _ := g.RecentCommitsTouching(ctx, "HEAD", []string{"never-existed.lock"}, 10); len(got) != 0 {
+		t.Errorf("unknown path: got %d commits, want 0", len(got))
+	}
+}
+
+func TestParseCommitLog(t *testing.T) {
+	// A well-formed record, a blank line, and a malformed line with too few
+	// fields — only the well-formed record should survive.
+	out := []byte("abc\x1fab\x1f2024-01-02\x1fhello\n\nmalformed-line\n")
+	got := parseCommitLog(out)
+	if len(got) != 1 {
+		t.Fatalf("got %d commits, want 1: %+v", len(got), got)
+	}
+	want := Commit{SHA: "abc", ShortSHA: "ab", Date: "2024-01-02", Subject: "hello"}
+	if got[0] != want {
+		t.Errorf("parseCommitLog = %+v, want %+v", got[0], want)
+	}
+}
+
+func TestRecentCommitsTouchingErrors(t *testing.T) {
+	ctx := context.Background()
+
+	// An invalid revision is rejected before git runs.
+	if _, err := fakeGit(execx.NewFake()).RecentCommitsTouching(ctx, "-bad", nil, 5); err == nil {
+		t.Error("expected error for option-like revision")
+	}
+	// A runner error is wrapped and surfaced.
+	wantErr := errors.New("exec failed")
+	if _, err := fakeGit(errRunner(wantErr)).RecentCommitsTouching(ctx, "HEAD", nil, 5); !errors.Is(err, wantErr) {
+		t.Errorf("err = %v, want wrapped %v", err, wantErr)
+	}
+	// A non-zero exit becomes an error naming the operation.
+	_, err := fakeGit(exitRunner("bad revision")).RecentCommitsTouching(ctx, "HEAD", nil, 5)
+	if err == nil || !strings.Contains(err.Error(), "list recent commits") {
+		t.Errorf("err = %v, want 'list recent commits'", err)
+	}
+}
+
+// TestResolveRevForeignStderr covers the branch where git fails with a
+// non-empty stderr that is not a "not a git repository" error: the raw stderr
+// must be surfaced verbatim rather than mapped to a sentinel.
+func TestResolveRevForeignStderr(t *testing.T) {
+	g := fakeGit(exitRunner("error: object file is empty"))
+	_, err := g.ResolveRev(context.Background(), "HEAD")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "object file is empty") {
+		t.Errorf("error %v should surface the raw git stderr", err)
+	}
 }
 
 func TestShowFile(t *testing.T) {
@@ -313,10 +426,16 @@ func TestRevisionFlagConfusionRejected(t *testing.T) {
 }
 
 func TestNotARepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
 	g := newGit(t, t.TempDir())
 	_, err := g.ResolveRev(context.Background(), "HEAD")
 	if err == nil {
 		t.Fatal("expected error outside a repository")
+	}
+	if !errors.Is(err, ErrNotARepo) {
+		t.Errorf("error %v should be ErrNotARepo", err)
 	}
 }
 
@@ -324,7 +443,7 @@ func TestNotARepo(t *testing.T) {
 // Error-path coverage using execx.Fake — no real git repo required.
 //
 // Every git.Run call has two error branches: (1) the runner itself returns a
-// non-nil error (binary not found, context cancelled, etc.) and (2) the
+// non-nil error (binary not found, context canceled, etc.) and (2) the
 // command exits with a non-zero code. The integration tests above exercise
 // the happy paths against a real repository; the tests below pin the error
 // paths so that removing or mis-routing an error return is caught immediately.
@@ -420,53 +539,38 @@ func TestRunnerErrorPropagates(t *testing.T) {
 func TestNonZeroExitCodePropagates(t *testing.T) {
 	ctx := context.Background()
 
+	// Each case asserts both the operation name and the stderr text in one test
+	// so that the table stays tidy and failures are self-contained.
 	cases := []struct {
-		name    string
-		runner  *execx.Fake
-		call    func(*Git) error
-		wantMsg string // substring expected in the error message
+		name     string
+		runner   *execx.Fake
+		call     func(*Git) error
+		wantMsgs []string // ALL substrings must appear in the error
 	}{
 		{
-			name:   "RemoveWorktree",
-			runner: exitRunner("worktree is locked"),
-			call: func(g *Git) error {
-				return g.RemoveWorktree(ctx, "/wt")
-			},
-			wantMsg: "remove worktree",
+			name:     "RemoveWorktree",
+			runner:   exitRunner("worktree is locked"),
+			call:     func(g *Git) error { return g.RemoveWorktree(ctx, "/wt") },
+			wantMsgs: []string{"remove worktree", "worktree is locked"},
 		},
 		{
-			name:   "RemoveWorktree stderr included",
-			runner: exitRunner("worktree is locked"),
-			call: func(g *Git) error {
-				return g.RemoveWorktree(ctx, "/wt")
-			},
-			wantMsg: "worktree is locked",
+			name:     "PruneWorktrees",
+			runner:   exitRunner("cannot prune"),
+			call:     func(g *Git) error { return g.PruneWorktrees(ctx) },
+			wantMsgs: []string{"prune worktrees", "cannot prune"},
 		},
 		{
-			name:   "PruneWorktrees",
-			runner: exitRunner("cannot prune"),
-			call: func(g *Git) error {
-				return g.PruneWorktrees(ctx)
-			},
-			wantMsg: "prune worktrees",
+			name:     "IsPathDirty",
+			runner:   exitRunner("not a git repo"),
+			call:     func(g *Git) error { _, err := g.IsPathDirty(ctx, "package.json"); return err },
+			wantMsgs: []string{"check status", "not a git repo"},
 		},
 		{
-			name:   "IsPathDirty",
-			runner: exitRunner("not a git repo"),
-			call: func(g *Git) error {
-				_, err := g.IsPathDirty(ctx, "package.json")
-				return err
-			},
-			wantMsg: "check status",
-		},
-		{
-			name:   "IsPathDirty stderr included",
-			runner: exitRunner("not a git repo"),
-			call: func(g *Git) error {
-				_, err := g.IsPathDirty(ctx, "package.json")
-				return err
-			},
-			wantMsg: "not a git repo",
+			// Empty stderr exercises firstLine's "no output" fallback.
+			name:     "IsPathDirty without stderr",
+			runner:   exitRunner(""),
+			call:     func(g *Git) error { _, err := g.IsPathDirty(ctx, "package.json"); return err },
+			wantMsgs: []string{"check status", "no output"},
 		},
 	}
 
@@ -477,8 +581,10 @@ func TestNonZeroExitCodePropagates(t *testing.T) {
 			if err == nil {
 				t.Fatalf("%s: got nil error on exit code 1, want non-nil", tc.name)
 			}
-			if !strings.Contains(err.Error(), tc.wantMsg) {
-				t.Errorf("%s: err = %q, want substring %q", tc.name, err, tc.wantMsg)
+			for _, want := range tc.wantMsgs {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("%s: err = %q, want substring %q", tc.name, err, want)
+				}
 			}
 		})
 	}
@@ -607,10 +713,15 @@ func TestShowFileCatFileErrors(t *testing.T) {
 	})
 }
 
-// TestContextCancellationPropagates verifies that a cancelled context causes
+// TestContextCancellationPropagates verifies that a canceled context causes
 // each Git method to return a context.Canceled-wrapped error rather than
 // blocking or returning nil. Context cancellation is the primary real-world
 // trigger for the runner-error branches exercised in TestRunnerErrorPropagates.
+//
+// AddWorktree, FileExists, and ShowFile are omitted here: execx.Fake checks
+// ctx.Err() before every call, so all three are guaranteed to propagate
+// cancellation identically to the methods below. The omission is intentional,
+// not an oversight.
 func TestContextCancellationPropagates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before any call

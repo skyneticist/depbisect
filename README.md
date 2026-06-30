@@ -1,5 +1,9 @@
 # DepBisect
 
+<p align="center">
+  <img src="docs/assets/images/mascot.png" alt="DepBisect mascot — an axolotl in a straw hat holding a coffee mug, wearing a scissors T-shirt" width="200">
+</p>
+
 > **`git bisect`, but for dependency updates.** Find the smallest set of dependency changes between two Git revisions that makes a command fail — and prove it's minimal.
 
 <!-- Badges render once the repository is public. -->
@@ -8,7 +12,7 @@
 [![Latest release](https://img.shields.io/github/v/release/skyneticist/depbisect?sort=semver)](https://github.com/skyneticist/depbisect/releases)
 [![Go 1.25+](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-
+                            
 
 
 You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
@@ -153,38 +157,15 @@ depbisect run --base main -- sh -c 'npm test 2>&1 | grep -v warn'
 
 DepBisect frames a failing dependency update as a [delta debugging](https://www.cs.purdue.edu/homes/xyzhang/fall07/Papers/delta-debugging.pdf) problem: the input to minimize is the set of changed dependencies, and the test is your verification command. It runs Zeller and Hildebrandt's `ddmin` algorithm, then a one-by-one removal pass that certifies the result is *1-minimal*.
 
-```text
-  --base ─┐
-          ├──▶  diff package.json  ──▶  N direct dependency changes
-  --to  ──┘
-                                              │
-                                              ▼
-                        isolated git worktree   (your checkout is never modified)
-                                              │
-                  ┌───────────────────────────┴───────────────────────────┐
-                  ▼                                                         ▼
-        revert ALL updates                                        apply ALL updates
-         (must PASS every run)                                    (must FAIL every run)
-                  └───────────────────────────┬───────────────────────────┘
-                                              ▼
-                              ddmin delta-debugging
-                  reset worktree → install a subset → run command → repeat
-                                              │
-                                              ▼
-                       one-by-one removal pass  ──▶  certify 1-minimal
-                                              │
-                                              ▼
-                          minimal breaking dependency set
-```
-
 1. **Resolve & diff.** `--base` and `--to` (default `HEAD`) are resolved to commits; the
-   `dependencies`, `devDependencies`, and `optionalDependencies` declared in `package.json`
-   are diffed with a structured JSON parser (never regex).
+   direct dependencies declared in your manifest (`package.json`, `Cargo.toml`, `go.mod`,
+   or `pyproject.toml`) are diffed with a structured parser (never regex).
 2. **Confirm the baselines.** In the isolated worktree, the command must *pass* with every
    update reverted and *fail* with every update applied. Anything else ends the run with a
    specific diagnostic instead of a bogus answer.
-3. **Delta-debug.** `ddmin` repeatedly resets the worktree, rewrites `package.json` to apply
-   a candidate subset, installs with npm/pnpm, and re-runs your command.
+3. **Delta-debug.** `ddmin` repeatedly resets the worktree, rewrites the manifest to apply
+   a candidate subset, installs with your package manager (npm, pnpm, cargo, go, or uv), and
+   re-runs your command.
 4. **Certify minimality.** Every one-change removal from the result is tested. The set is
    reported as 1-minimal only when all of those neighbors resolve and pass.
 5. **Report.** Results go to the terminal, `depbisect-report.md`, and a schema-stable

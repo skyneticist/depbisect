@@ -4,15 +4,22 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/skyneticist/depbisect/internal/checkpoint"
 	"github.com/skyneticist/depbisect/internal/engine"
+	"github.com/skyneticist/depbisect/internal/gitx"
 	"github.com/skyneticist/depbisect/internal/manifest"
+	"github.com/skyneticist/depbisect/internal/report"
 )
 
 func runCLI(t *testing.T, args ...string) (code int, stdout, stderr string) {
@@ -33,7 +40,9 @@ func TestUsageErrors(t *testing.T) {
 		{"run without base", []string{"run", "--", "npm", "test"}, "--base"},
 		{"run without separator", []string{"run", "--base", "main", "npm", "test"}, "--"},
 		{"run without command", []string{"run", "--base", "main", "--"}, "verification command"},
+		{"stray arg before separator", []string{"run", "--base", "main", "stray", "--", "x"}, "unexpected argument"},
 		{"bad runs", []string{"run", "--base", "main", "--runs", "0", "--", "x"}, "--runs"},
+		{"bad jobs", []string{"run", "--base", "main", "--jobs", "0", "--", "x"}, "--jobs"},
 		{"negative run timeout", []string{"run", "--base", "main", "--run-timeout", "-1s", "--", "x"}, "--run-timeout"},
 		{"negative install timeout", []string{"run", "--base", "main", "--install-timeout", "-1s", "--", "x"}, "--install-timeout"},
 		{"negative overall timeout", []string{"run", "--base", "main", "--overall-timeout", "-1s", "--", "x"}, "--overall-timeout"},
@@ -41,6 +50,8 @@ func TestUsageErrors(t *testing.T) {
 		{"bad style", []string{"run", "--base", "main", "--style", "fancy", "--", "x"}, "--style"},
 		{"unknown flag", []string{"run", "--base", "main", "--bogus", "--", "x"}, "bogus"},
 		{"completion unknown shell", []string{"completion", "fish"}, "fish"},
+		{"completion no args", []string{"completion"}, "usage"},
+		{"resume without checkpoint", []string{"run", "--base", "main", "--resume", "--checkpoint", "", "--", "x"}, "--resume"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -649,6 +660,15 @@ func TestRunMainEngineErrorContextCanceled(t *testing.T) {
 
 func TestRunMainEngineErrorWithCheckpointHint(t *testing.T) {
 	cpPath := filepath.Join(t.TempDir(), "state.jsonl")
+	// Seed a checkpoint that already holds a completed trial; only then is
+	// suggesting --resume meaningful.
+	store := checkpoint.NewFileStore(cpPath)
+	if err := store.Start(engine.Checkpoint{}); err != nil {
+		t.Fatalf("seed checkpoint header: %v", err)
+	}
+	if err := store.Append(engine.Trial{Role: "candidate", Outcome: "fail"}); err != nil {
+		t.Fatalf("seed checkpoint trial: %v", err)
+	}
 	code, _, stderr := runMainWith(t,
 		func(_ context.Context, _ engine.Options) (*engine.Result, error) {
 			return nil, errors.New("something failed")
@@ -663,6 +683,221 @@ func TestRunMainEngineErrorWithCheckpointHint(t *testing.T) {
 	}
 	if !strings.Contains(stderr, cpPath) {
 		t.Errorf("stderr should include checkpoint path: %q", stderr)
+	}
+}
+
+// TestRunMainEngineErrorNoCheckpointHintWhenEmpty verifies that a run which
+// fails before any trial completes does not dangle a useless "resume with
+// --resume" suggestion: there is nothing in the checkpoint to resume.
+func TestRunMainEngineErrorNoCheckpointHintWhenEmpty(t *testing.T) {
+	cpPath := filepath.Join(t.TempDir(), "state.jsonl")
+	code, _, stderr := runMainWith(t,
+		func(_ context.Context, _ engine.Options) (*engine.Result, error) {
+			return nil, errors.New("something failed")
+		},
+		"--checkpoint", cpPath,
+	)
+	if code != ExitError {
+		t.Errorf("exit = %d, want %d", code, ExitError)
+	}
+	if strings.Contains(stderr, "--resume") {
+		t.Errorf("stderr should not suggest --resume with no completed trials: %q", stderr)
+	}
+}
+
+// TestRunMainErrorHints verifies that recognized first-run failures append an
+// actionable "hint:" line, while an unrecognized error does not.
+func TestRunMainErrorHints(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		wantHint string // substring that must appear, or "" for no hint at all
+	}{
+		{"no commits", gitx.ErrNoCommits, "make at least one commit"},
+		{"no such commit", gitx.ErrNoSuchCommit, "HEAD~1 needs at least two commits"},
+		{"not a repo", gitx.ErrNotARepo, "--repo <path>"},
+		{"unrecognized", errors.New("boom"), ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, _, stderr := runMainWith(t, func(_ context.Context, _ engine.Options) (*engine.Result, error) {
+				return nil, tc.err
+			})
+			if code != ExitError {
+				t.Errorf("exit = %d, want %d", code, ExitError)
+			}
+			if tc.wantHint == "" {
+				if strings.Contains(stderr, "hint:") {
+					t.Errorf("unrecognized error should print no hint: %q", stderr)
+				}
+				return
+			}
+			if !strings.Contains(stderr, "hint:") || !strings.Contains(stderr, tc.wantHint) {
+				t.Errorf("stderr = %q, want hint containing %q", stderr, tc.wantHint)
+			}
+		})
+	}
+}
+
+// gitRepoWith creates a temporary git repository, running each step (a slice
+// of git args, or a special {"write", path, body} form) in order, and returns
+// the repo path.
+func gitRepoWith(t *testing.T, steps ...[]string) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid",
+			"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	for _, s := range steps {
+		if s[0] == "write" {
+			if err := os.WriteFile(filepath.Join(dir, s[1]), []byte(s[2]), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		git(s...)
+	}
+	return dir
+}
+
+func TestRunMainSuggestBaseListsDependencyCommits(t *testing.T) {
+	dir := gitRepoWith(t,
+		[]string{"write", "package.json", `{"name":"a","dependencies":{"x":"1.0.0"}}`},
+		[]string{"add", "-A"}, []string{"commit", "-qm", "add deps"},
+		[]string{"write", "main.js", "code"},
+		[]string{"add", "-A"}, []string{"commit", "-qm", "feature (no deps)"},
+		[]string{"write", "package.json", `{"name":"a","dependencies":{"x":"2.0.0"}}`},
+		[]string{"add", "-A"}, []string{"commit", "-qm", "bump x"},
+	)
+	code, _, stderr := runCLI(t, "run", "--repo", dir, "--", "npm", "test")
+	if code != ExitError {
+		t.Errorf("exit = %d, want %d", code, ExitError)
+	}
+	if !strings.Contains(stderr, "--base is required") {
+		t.Errorf("stderr should explain --base: %q", stderr)
+	}
+	// Both dependency-touching commits appear; the no-deps commit does not.
+	if !strings.Contains(stderr, "add deps") || !strings.Contains(stderr, "bump x") {
+		t.Errorf("stderr should list dependency commits: %q", stderr)
+	}
+	if strings.Contains(stderr, "feature (no deps)") {
+		t.Errorf("stderr should not list non-dependency commits: %q", stderr)
+	}
+	// The example reconstructs the user's actual command after the separator.
+	if !strings.Contains(stderr, "Then run:") || !strings.Contains(stderr, "-- npm test") {
+		t.Errorf("stderr should suggest a concrete command: %q", stderr)
+	}
+}
+
+func TestRunMainSuggestBaseEmptyRepo(t *testing.T) {
+	dir := gitRepoWith(t) // initialized, no commits
+	code, _, stderr := runCLI(t, "run", "--repo", dir, "--", "npm", "test")
+	if code != ExitError {
+		t.Errorf("exit = %d, want %d", code, ExitError)
+	}
+	if !strings.Contains(stderr, "could not inspect") || !strings.Contains(stderr, "no commits yet") {
+		t.Errorf("stderr should report the empty repo: %q", stderr)
+	}
+	if !strings.Contains(stderr, "hint:") {
+		t.Errorf("stderr should include a hint: %q", stderr)
+	}
+}
+
+func TestRunMainSuggestBaseNoDependencyHistory(t *testing.T) {
+	dir := gitRepoWith(t,
+		[]string{"write", "README.md", "hi"},
+		[]string{"add", "-A"}, []string{"commit", "-qm", "docs only"},
+	)
+	code, _, stderr := runCLI(t, "run", "--repo", dir, "--", "npm", "test")
+	if code != ExitError {
+		t.Errorf("exit = %d, want %d", code, ExitError)
+	}
+	// No dependency files were ever touched: fall back to explicit guidance.
+	if !strings.Contains(stderr, "No dependency changes found") {
+		t.Errorf("stderr should fall back to explicit guidance: %q", stderr)
+	}
+	// Still offers a copy-pasteable command with a placeholder base.
+	if !strings.Contains(stderr, "--base <rev> -- npm test") {
+		t.Errorf("stderr should show a placeholder command: %q", stderr)
+	}
+}
+
+func TestRunMainGuidanceMissingSeparator(t *testing.T) {
+	dir := gitRepoWith(t,
+		[]string{"write", "package.json", `{"name":"a","dependencies":{"x":"1.0.0"}}`},
+		[]string{"add", "-A"}, []string{"commit", "-qm", "add deps"},
+	)
+
+	t.Run("no separator, base given", func(t *testing.T) {
+		// --base is present, so no commit list is needed — just the syntax fix.
+		code, _, stderr := runCLI(t, "run", "--repo", dir, "--base", "HEAD", "npm", "test")
+		if code != ExitError {
+			t.Errorf("exit = %d, want %d", code, ExitError)
+		}
+		if !strings.Contains(stderr, `"--" separator`) {
+			t.Errorf("stderr should explain the separator: %q", stderr)
+		}
+		if strings.Contains(stderr, "Recent commits") {
+			t.Errorf("a provided --base should not trigger a commit list: %q", stderr)
+		}
+		if !strings.Contains(stderr, "--base HEAD -- npm test") {
+			t.Errorf("stderr should reconstruct the command: %q", stderr)
+		}
+	})
+
+	t.Run("no separator, no base", func(t *testing.T) {
+		// Both missing: combined headline, commit list, and full example.
+		code, _, stderr := runCLI(t, "run", "--repo", dir, "cargo", "test")
+		if code != ExitError {
+			t.Errorf("exit = %d, want %d", code, ExitError)
+		}
+		if !strings.Contains(stderr, `"--" separator`) || !strings.Contains(stderr, "--base") {
+			t.Errorf("stderr should name both missing pieces: %q", stderr)
+		}
+		if !strings.Contains(stderr, "Recent commits") || !strings.Contains(stderr, "-- cargo test") {
+			t.Errorf("stderr should list commits and reconstruct the command: %q", stderr)
+		}
+	})
+
+	t.Run("flag-like token in command stays a placeholder", func(t *testing.T) {
+		// We cannot tell where the command begins, so avoid implying --release
+		// is a depbisect flag.
+		_, _, stderr := runCLI(t, "run", "--repo", dir, "cargo", "build", "--release")
+		if strings.Contains(stderr, "cargo build") {
+			t.Errorf("ambiguous command should not be reconstructed: %q", stderr)
+		}
+		if !strings.Contains(stderr, "-- <command>") {
+			t.Errorf("stderr should use a command placeholder: %q", stderr)
+		}
+	})
+}
+
+func TestExampleCommand(t *testing.T) {
+	cases := []struct {
+		in   []string
+		want string
+	}{
+		{nil, "<command>"},
+		{[]string{"npm", "test"}, "npm test"},
+		{[]string{"cargo", "build", "--release"}, "<command>"}, // flag-like token
+		{[]string{"-x"}, "<command>"},
+	}
+	for _, tc := range cases {
+		if got := exampleCommand(tc.in); got != tc.want {
+			t.Errorf("exampleCommand(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
 
@@ -776,6 +1011,27 @@ func TestRunMainJSONReportWriteError(t *testing.T) {
 	}
 }
 
+func TestRunMainMarkdownReportWriteError(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	// Point --report-md at a directory so os.WriteFile fails.
+	badMDPath := t.TempDir()
+	jsonPath := filepath.Join(t.TempDir(), "r.json")
+
+	code, _, stderr := runMainWith(t,
+		func(_ context.Context, _ engine.Options) (*engine.Result, error) {
+			return minimalResult(), nil
+		},
+		"--report-md", badMDPath,
+		"--report-json", jsonPath,
+	)
+	if code != ExitOK {
+		t.Errorf("MD write error must not change exit code; got %d", code)
+	}
+	if !strings.Contains(stderr, "write Markdown report") {
+		t.Errorf("stderr should mention 'write Markdown report': %q", stderr)
+	}
+}
+
 func TestRunMainQuietSuppressesProgress(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	var engineOpts engine.Options
@@ -820,5 +1076,80 @@ func TestRunMainCheckpointNotSetOnDryRun(t *testing.T) {
 	)
 	if capturedCheckpoint != nil {
 		t.Error("--dry-run must not pass a checkpoint store to the engine")
+	}
+}
+
+// --- Coverage for runMain's real-engine wiring and writeJSONReport ---------
+//
+// The unit tests above stub testEngineRun, so the production NewInstaller and
+// engineRun closures in runMain are never exercised in-process (the cmd e2e
+// suite hits them, but via a subprocess that Go cannot attribute coverage to).
+// The test below drives the real engine in-process against a tiny npm fixture
+// with a stubbed `npm`, so a candidate actually "installs".
+
+const baseFixturePkg = `{"name":"fixture","version":"1.0.0","dependencies":{"leftpad":"1.0.0"}}`
+const newFixturePkg = `{"name":"fixture","version":"1.0.0","dependencies":{"leftpad":"2.0.0"}}`
+
+func npmLockFixture(leftpad string) string {
+	return fmt.Sprintf(`{"name":"fixture","lockfileVersion":3,"packages":{"":{},"node_modules/leftpad":{"version":%q}}}`, leftpad)
+}
+
+// stubNPM puts a fake `npm` (succeeds; reports a version) first on PATH for the
+// duration of the test, so the engine can install without touching a registry.
+func stubNPM(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("npm stub uses a POSIX shell script")
+	}
+	for _, bin := range []string{"git", "sh", "true"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s not installed", bin)
+		}
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 9.9.9-test; fi\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "npm"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestRunMainRealEngineInstalls(t *testing.T) {
+	stubNPM(t)
+	dir := gitRepoWith(t,
+		[]string{"write", "package.json", baseFixturePkg},
+		[]string{"write", "package-lock.json", npmLockFixture("1.0.0")},
+		[]string{"add", "-A"}, []string{"commit", "-qm", "base"},
+		[]string{"write", "package.json", newFixturePkg},
+		[]string{"write", "package-lock.json", npmLockFixture("2.0.0")},
+		[]string{"add", "-A"}, []string{"commit", "-qm", "bump leftpad"},
+	)
+	// `true` always passes, so the failure never reproduces (OutcomeNotReproduced),
+	// but the engine still installs the candidate first — invoking NewInstaller.
+	// Keep the checkpoint inside a temp dir so nothing lands in the package tree.
+	cp := filepath.Join(t.TempDir(), "cp.jsonl")
+	var out, errb bytes.Buffer
+	code := runMain([]string{
+		"--repo", dir, "--base", "HEAD~1", "--checkpoint", cp,
+		"--no-reports", "--quiet", "--", "true",
+	}, &out, &errb, "test-version")
+
+	// The point is that the real engine ran to a verdict, not a usage/setup
+	// error. NotReproduced is the expected outcome for an always-passing command.
+	if code != ExitNotReproduced {
+		t.Fatalf("exit = %d, want %d (ExitNotReproduced)\nstderr: %s", code, ExitNotReproduced, errb.String())
+	}
+}
+
+func TestWriteJSONReportEncodeError(t *testing.T) {
+	// NaN cannot be encoded as JSON, so rep.JSON() fails and writeJSONReport
+	// must surface the wrapped error rather than panic or write a bad file.
+	path := filepath.Join(t.TempDir(), "report.json")
+	err := writeJSONReport(&report.Report{DurationSeconds: math.NaN()}, path)
+	if err == nil || !strings.Contains(err.Error(), "encode JSON report") {
+		t.Fatalf("err = %v, want an 'encode JSON report' error", err)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Errorf("no file should be written on encode failure (stat err: %v)", statErr)
 	}
 }

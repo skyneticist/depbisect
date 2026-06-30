@@ -2,6 +2,7 @@ package verify
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -149,5 +150,129 @@ func TestVerdictStrings(t *testing.T) {
 	v = Verdict{Planned: 3, Runs: []RunResult{{ExitCode: 1}, {ExitCode: 0}}, Failures: 1}
 	if got := v.String(); got != "failed 1/2 runs" {
 		t.Errorf("String() = %q", got)
+	}
+}
+
+func TestClassificationString(t *testing.T) {
+	cases := []struct {
+		c    Classification
+		want string
+	}{
+		{AlwaysPass, "always-pass"},
+		{AlwaysFail, "always-fail"},
+		{Mixed, "mixed"},
+		{Classification(99), "classification(99)"},
+	}
+	for _, tc := range cases {
+		if got := tc.c.String(); got != tc.want {
+			t.Errorf("Classification(%d).String() = %q, want %q", int(tc.c), got, tc.want)
+		}
+	}
+}
+
+func TestVerifyEmptyCommand(t *testing.T) {
+	h := Harness{Runner: &seqRunner{}, Command: []string{}}
+	if _, err := h.Verify(context.Background(), ""); err == nil {
+		t.Fatal("expected error for empty command")
+	}
+}
+
+func TestVerifyRunnerFatalError(t *testing.T) {
+	// Runner returns a non-context error (e.g., executable not found). Verify
+	// must propagate it as a fatal error, distinct from a per-run failure.
+	fatErr := errors.New("exec: no such file or directory")
+	h := Harness{
+		Runner: runnerFunc(func(_ context.Context, _ execx.Cmd) (execx.Result, error) {
+			return execx.Result{}, fatErr
+		}),
+		Command: []string{"x"},
+		Runs:    3,
+	}
+	v, err := h.Verify(context.Background(), "")
+	if err == nil {
+		t.Fatal("expected fatal error from runner")
+	}
+	if !errors.Is(err, fatErr) {
+		t.Errorf("err = %v, want to wrap %v", err, fatErr)
+	}
+	if len(v.Runs) != 0 {
+		t.Errorf("runs = %d, want 0 (fatal error, no run result recorded)", len(v.Runs))
+	}
+}
+
+func TestVerifyParentCancelledMidRun(t *testing.T) {
+	// Simulates a SIGINT arriving while the verification command is executing:
+	// the runner cancels the parent context and returns ctx.Err(). Verify must
+	// surface the cancellation error, not treat it as a per-run failure.
+	ctx, cancel := context.WithCancel(context.Background())
+	h := Harness{
+		Runner: runnerFunc(func(_ context.Context, _ execx.Cmd) (execx.Result, error) {
+			cancel()
+			return execx.Result{}, context.Canceled
+		}),
+		Command: []string{"x"},
+		Runs:    3,
+	}
+	_, err := h.Verify(ctx, "")
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestRunResultFailed(t *testing.T) {
+	if (RunResult{ExitCode: 0}).Failed() {
+		t.Error("exit 0 should not be failed")
+	}
+	if !(RunResult{ExitCode: 1}).Failed() {
+		t.Error("exit 1 should be failed")
+	}
+	if !(RunResult{TimedOut: true}).Failed() {
+		t.Error("timed out should be failed")
+	}
+}
+
+func TestVerifyCommandFirstArgIsProgram(t *testing.T) {
+	// Command[0] is the program; Command[1:] are its arguments. Harness must
+	// not pass Command[0] as an element of Args.
+	r := &seqRunner{codes: []int{0}}
+	h := Harness{Runner: r, Command: []string{"pnpm", "run", "test"}, Runs: 1}
+	if _, err := h.Verify(context.Background(), "/proj"); err != nil {
+		t.Fatal(err)
+	}
+	if r.calls[0].Name != "pnpm" {
+		t.Errorf("Name = %q, want pnpm", r.calls[0].Name)
+	}
+	if len(r.calls[0].Args) != 2 || r.calls[0].Args[0] != "run" {
+		t.Errorf("Args = %q, want [run test]", r.calls[0].Args)
+	}
+}
+
+func TestVerifyRecordsRunDuration(t *testing.T) {
+	const dur = 42 * time.Millisecond
+	r := runnerFunc(func(_ context.Context, _ execx.Cmd) (execx.Result, error) {
+		return execx.Result{ExitCode: 0, Duration: dur}, nil
+	})
+	h := Harness{Runner: r, Command: []string{"x"}, Runs: 1}
+	v, err := h.Verify(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Runs[0].Duration != dur {
+		t.Errorf("Duration = %v, want %v", v.Runs[0].Duration, dur)
+	}
+}
+
+func TestVerifyPlannedMatchesRuns(t *testing.T) {
+	r := &seqRunner{codes: []int{0, 0, 0}}
+	h := Harness{Runner: r, Command: []string{"x"}, Runs: 3}
+	v, err := h.Verify(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Planned != 3 {
+		t.Errorf("Planned = %d, want 3", v.Planned)
 	}
 }

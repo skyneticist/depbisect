@@ -274,27 +274,51 @@ func TestManagerLabel(t *testing.T) {
 func TestPrintSummaryAllOutcomes(t *testing.T) {
 	ch := makeChange("lodash", "^4.17.20", "^4.17.21")
 	cases := []struct {
-		outcome string
-		want    string
+		outcome      string
+		wantSection  string // non-empty: a change section must appear
+		wantHeadline string // exact headline substring always required
 	}{
-		{engine.OutcomeMinimalFound, "Breaking dependencies"},
-		{engine.OutcomeInconclusive, "Best-known failing set"},
-		{engine.OutcomeDryRun, "Dependency changes"},
-		{engine.OutcomeNotReproduced, ""},    // no change section
-		{engine.OutcomeFailsAtBase, ""},       // no change section
-		{engine.OutcomeNoChanges, ""},         // no change section
+		{
+			outcome:      engine.OutcomeMinimalFound,
+			wantSection:  "Breaking dependencies",
+			wantHeadline: "Minimal breaking dependency set found",
+		},
+		{
+			outcome:      engine.OutcomeInconclusive,
+			wantSection:  "Best-known failing set",
+			wantHeadline: "Inconclusive",
+		},
+		{
+			outcome:      engine.OutcomeDryRun,
+			wantSection:  "Dependency changes",
+			wantHeadline: "Dry run complete",
+		},
+		{
+			outcome:      engine.OutcomeNotReproduced,
+			wantHeadline: "No breaking dependency update reproduced the failure",
+		},
+		{
+			outcome:      engine.OutcomeFailsAtBase,
+			wantHeadline: "Failure exists without dependency updates",
+		},
+		{
+			outcome:      engine.OutcomeNoChanges,
+			wantHeadline: "No dependency changes to bisect",
+		},
 	}
 	for _, tc := range cases {
-		var buf bytes.Buffer
-		res := makeResult(tc.outcome, ch)
-		printSummary(&buf, res, "", "", styleClassic)
-		out := buf.String()
-		if tc.want != "" && !strings.Contains(out, tc.want) {
-			t.Errorf("outcome %q: want %q in output, got:\n%s", tc.outcome, tc.want, out)
-		}
-		if !strings.Contains(out, "Result") {
-			t.Errorf("outcome %q: missing Result label in output", tc.outcome)
-		}
+		t.Run(tc.outcome, func(t *testing.T) {
+			var buf bytes.Buffer
+			res := makeResult(tc.outcome, ch)
+			printSummary(&buf, res, "", "", styleClassic)
+			out := buf.String()
+			if !strings.Contains(out, tc.wantHeadline) {
+				t.Errorf("outcome %q: want headline %q in output, got:\n%s", tc.outcome, tc.wantHeadline, out)
+			}
+			if tc.wantSection != "" && !strings.Contains(out, tc.wantSection) {
+				t.Errorf("outcome %q: want change section %q in output, got:\n%s", tc.outcome, tc.wantSection, out)
+			}
+		})
 	}
 }
 

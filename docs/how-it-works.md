@@ -2,7 +2,7 @@
 
 ## Pipeline
 
-1. **Resolve revisions.** `--base` and `--to` (default `HEAD`) are resolved to commits. Uncommitted changes are ignored (and warned about if they touch `package.json` or the lockfile).
+1. **Resolve revisions.** `--base` and `--to` (default `HEAD`) are resolved to commits. Uncommitted changes are ignored (and warned about if they touch the manifest or lockfile).
 2. **Diff manifests.** The manifest (`package.json`, `Cargo.toml`, `go.mod`, or `pyproject.toml`) is read at both revisions with a structured parser. Direct dependency changes across the manifest's dependency sections are classified as updated, added, or removed.
 3. **Read lockfiles.** `package-lock.json` (v1–v3), `pnpm-lock.yaml` (v5/v6/v9), `Cargo.lock`, `go.sum`, or `uv.lock` supplies exact resolved versions for display, and exposes *lockfile-only* changes — dependencies whose spec is unchanged but whose resolution moved. These cannot be bisected (see below) and are reported as diagnostics.
 4. **Create an isolated worktree.** `git worktree add --detach` checks out `--to` in a private temporary directory. The user's checkout is never touched.
@@ -37,4 +37,4 @@ The ddmin core is pure and deterministic; identical test outcomes produce identi
 
 ## Why lockfile-only changes cannot be bisected
 
-DepBisect materializes candidates by editing version specs in `package.json`. If a spec like `^1.2.0` is unchanged but the lockfile resolution moved from `1.2.3` to `1.9.0`, there is no manifest edit that pins the old resolution without also changing the spec — and synthesizing per-candidate lockfiles is package-manager-version-specific and fragile. DepBisect reports these changes explicitly so you can investigate them manually (e.g. with `npm ls` or pinned overrides).
+DepBisect materializes candidates by editing version specs in the manifest. If a spec like `^1.2.0` is unchanged but the lockfile resolution moved from `1.2.3` to `1.9.0`, there is no manifest edit that pins the old resolution without also changing the spec — and synthesizing per-candidate lockfiles is package-manager-version-specific and fragile. DepBisect reports these changes explicitly so you can investigate them manually (e.g. by inspecting the lockfile diff or pinning an override).

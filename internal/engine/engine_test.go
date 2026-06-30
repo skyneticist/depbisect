@@ -33,6 +33,11 @@ type fakeGit struct {
 	failPrune          bool
 	onReset            func()
 	onRemove           func()
+	// failAddWorktreeAfter, when > 0, causes AddWorktree to return an error
+	// starting at the (failAddWorktreeAfter+1)th call. Used to test partial
+	// worktree-pool setup cleanup.
+	failAddWorktreeAfter int
+	addWorktreeCalls     int
 }
 
 func (g *fakeGit) resolve(rev string) (string, bool) {
@@ -74,6 +79,13 @@ func (g *fakeGit) FileExists(ctx context.Context, rev, path string) (bool, error
 }
 
 func (g *fakeGit) AddWorktree(ctx context.Context, dir, rev string) error {
+	g.mu.Lock()
+	g.addWorktreeCalls++
+	calls := g.addWorktreeCalls
+	g.mu.Unlock()
+	if g.failAddWorktreeAfter > 0 && calls > g.failAddWorktreeAfter {
+		return fmt.Errorf("AddWorktree: simulated failure at call %d", calls)
+	}
 	sha, ok := g.resolve(rev)
 	if !ok {
 		return fmt.Errorf("unknown rev %q", rev)
@@ -1867,6 +1879,327 @@ func TestEqualStrings(t *testing.T) {
 	for _, tc := range cases {
 		if got := equalStrings(tc.a, tc.b); got != tc.want {
 			t.Errorf("equalStrings(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HarnessVerifier — confirms the adapter correctly wires stopOnPass through
+// to the underlying verify.Harness. This is the only adapter-level logic:
+// the engine controls early-stop per phase.
+// ---------------------------------------------------------------------------
+
+// fixedExitRunner always returns the configured exit code, recording each call.
+type fixedExitRunner struct {
+	exitCode int
+	calls    int
+}
+
+func (r *fixedExitRunner) Run(_ context.Context, _ execx.Cmd) (execx.Result, error) {
+	r.calls++
+	return execx.Result{ExitCode: r.exitCode}, nil
+}
+
+func TestHarnessVerifierWiresStopOnPass(t *testing.T) {
+	runner := &fixedExitRunner{exitCode: 0} // always passes
+	h := HarnessVerifier{
+		Harness: verify.Harness{
+			Runner:  runner,
+			Command: []string{"true"},
+			Runs:    5,
+		},
+	}
+
+	// stopOnPass=true: the harness must stop after the first passing run.
+	v, err := h.Verify(context.Background(), t.TempDir(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Runs) != 1 {
+		t.Errorf("stopOnPass=true: executed %d runs, want 1", len(v.Runs))
+	}
+	firstCallCount := runner.calls
+	runner.calls = 0
+
+	// stopOnPass=false: all 5 runs must complete regardless of outcome.
+	v, err = h.Verify(context.Background(), t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Runs) != 5 {
+		t.Errorf("stopOnPass=false: executed %d runs, want 5", len(v.Runs))
+	}
+	_ = firstCallCount
+}
+
+// ---------------------------------------------------------------------------
+// detectManager — uncovered branches
+// ---------------------------------------------------------------------------
+
+func TestRunGoWorkspaceUnsupported(t *testing.T) {
+	env := newEnv(t, threeChangeGoRepo(), func(map[string]string) bool { return false }, 1)
+	env.git.files["sha-head"]["go.work"] = "go 1.22\n"
+	_, err := env.eng.Run(context.Background(), baseOpts())
+	if err == nil || !strings.Contains(err.Error(), "go.work") {
+		t.Fatalf("err = %v, want go.work-unsupported error", err)
+	}
+	if len(env.tempDirs) != 0 {
+		t.Error("no worktree should be created when go.work is present")
+	}
+}
+
+func TestRunPyprojectWithoutUvLockFails(t *testing.T) {
+	env := newEnv(t, threeChangePythonRepo(), func(map[string]string) bool { return false }, 1)
+	delete(env.git.files["sha-head"], "uv.lock")
+	_, err := env.eng.Run(context.Background(), baseOpts())
+	if err == nil {
+		t.Fatal("expected error when pyproject.toml has no uv.lock")
+	}
+	if !strings.Contains(err.Error(), "pyproject.toml") || !strings.Contains(err.Error(), "uv.lock") {
+		t.Errorf("err = %v, want mention of pyproject.toml and uv.lock", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// readManifest — eco.Parse failure (file exists but content is invalid)
+// ---------------------------------------------------------------------------
+
+func TestRunMalformedManifestAtBaseFails(t *testing.T) {
+	git := threeChangeRepo()
+	git.files["sha-base"]["package.json"] = "{not valid json}"
+	env := newEnv(t, git, nil, 1)
+	_, err := env.eng.Run(context.Background(), baseOpts())
+	if err == nil {
+		t.Fatal("expected parse error for malformed base manifest")
+	}
+	// Error message includes the revision label so the user knows which side is broken.
+	if !strings.Contains(err.Error(), "base") {
+		t.Errorf("err = %v, want mention of 'base' revision", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// readLockfile — ShowFile failure (no lockfile at the revision)
+// ---------------------------------------------------------------------------
+
+func TestRunLockfileReadFailureIsDiagnosed(t *testing.T) {
+	git := threeChangeRepo()
+	delete(git.files["sha-base"], "package-lock.json") // no lockfile at base
+	env := newEnv(t, git, func(deps map[string]string) bool {
+		return deps["beta"] == "3.2.0"
+	}, 1)
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Missing lockfile is non-fatal: the run continues without resolved-version
+	// annotations for that side.
+	if res.Outcome != OutcomeMinimalFound {
+		t.Fatalf("outcome = %q, want MinimalFound", res.Outcome)
+	}
+	joined := strings.Join(res.Diagnostics, "\n")
+	if !strings.Contains(joined, "unknown") {
+		t.Errorf("diagnostics should mention unknown resolved versions: %v", res.Diagnostics)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Worktree pool partial-setup cleanup
+// ---------------------------------------------------------------------------
+
+// TestRunWorktreePoolPartialSetupCleansUp verifies that when the second of N
+// AddWorktree calls fails during pool setup, the already-created first worktree
+// is cleaned up and the parent temp directory is removed. Skipping cleanup here
+// would leak worktrees even though the run returns an error.
+func TestRunWorktreePoolPartialSetupCleansUp(t *testing.T) {
+	git := threeChangeRepo()
+	git.failAddWorktreeAfter = 1 // first call succeeds, second fails
+	env := newEnv(t, git, func(map[string]string) bool { return false }, 1)
+	opts := baseOpts()
+	opts.Jobs = 2 // requests a pool of 2 lanes
+
+	_, err := env.eng.Run(context.Background(), opts)
+	if err == nil {
+		t.Fatal("expected error when AddWorktree fails during pool setup")
+	}
+	if !strings.Contains(err.Error(), "AddWorktree") {
+		t.Errorf("err = %v, want AddWorktree failure message", err)
+	}
+	// The first lane's worktree must be cleaned up.
+	if len(env.git.removed) == 0 {
+		t.Error("partial pool setup failure must clean up the first worktree")
+	}
+	// Parent temp dir must be gone too.
+	for _, d := range env.tempDirs {
+		if _, statErr := os.Stat(d); !os.IsNotExist(statErr) {
+			t.Errorf("temp dir %s still exists after partial pool cleanup", d)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Checkpoint store error paths
+// ---------------------------------------------------------------------------
+
+// appendErrorStore is a CheckpointStore whose Append always returns an error.
+type appendErrorStore struct {
+	starts int
+	err    error
+}
+
+func (s *appendErrorStore) Load() (*Checkpoint, error) { return nil, os.ErrNotExist }
+func (s *appendErrorStore) Start(Checkpoint) error     { s.starts++; return nil }
+func (s *appendErrorStore) Append(Trial) error         { return s.err }
+func (s *appendErrorStore) Clear() error               { return nil }
+
+// clearFailStore wraps fakeCheckpointStore and returns an error from Clear.
+type clearFailStore struct {
+	*fakeCheckpointStore
+}
+
+func (s *clearFailStore) Clear() error { return errors.New("fsync failed") }
+
+func TestRunCheckpointAppendFailureIsFatal(t *testing.T) {
+	env := newEnv(t, threeChangeRepo(), func(map[string]string) bool { return false }, 1)
+	store := &appendErrorStore{err: errors.New("disk full")}
+	opts := baseOpts()
+	opts.Checkpoint = store
+	_, err := env.eng.Run(context.Background(), opts)
+	if err == nil {
+		t.Fatal("checkpoint append failure must propagate as a fatal error")
+	}
+	if !strings.Contains(err.Error(), "disk full") {
+		t.Errorf("err = %v, want 'disk full' wrapped in error chain", err)
+	}
+}
+
+func TestRunCheckpointClearFailureIsNonFatal(t *testing.T) {
+	// A successful run tries to clear the checkpoint on completion. A Clear
+	// error must not abort the run — the result is still valid; the user
+	// just needs to remove the checkpoint file manually.
+	store := &clearFailStore{&fakeCheckpointStore{}}
+	env := newEnv(t, threeChangeRepo(), func(deps map[string]string) bool {
+		return deps["beta"] == "3.2.0"
+	}, 1)
+	opts := baseOpts()
+	opts.Checkpoint = store
+	res, err := env.eng.Run(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("checkpoint clear failure must not abort the run: %v", err)
+	}
+	if res.Outcome != OutcomeMinimalFound {
+		t.Fatalf("outcome = %q, want MinimalFound", res.Outcome)
+	}
+	joined := strings.Join(res.Diagnostics, "\n")
+	if !strings.Contains(joined, "checkpoint") {
+		t.Errorf("diagnostics must mention the checkpoint clear error: %v", res.Diagnostics)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Utility functions — direct unit tests for uncovered branches
+// ---------------------------------------------------------------------------
+
+func TestLockfileOnlyHint(t *testing.T) {
+	if got := lockfileOnlyHint(&Result{}); got != "" {
+		t.Errorf("empty LockfileOnly: got %q, want empty string", got)
+	}
+	res := &Result{
+		LockfileOnly: []manifest.LockfileChange{
+			{Name: "transit", Spec: "^4.0.0", OldResolved: "4.0.1", NewResolved: "4.9.0"},
+		},
+	}
+	got := lockfileOnlyHint(res)
+	if got == "" {
+		t.Fatal("non-empty LockfileOnly: got empty string, want hint")
+	}
+	if !strings.Contains(got, "1") {
+		t.Errorf("hint should include count: %q", got)
+	}
+}
+
+func TestLockfileOnlyNamesLong(t *testing.T) {
+	// Exactly maxListed (8) entries — no truncation.
+	eight := make([]manifest.LockfileChange, 8)
+	for i := range eight {
+		eight[i] = manifest.LockfileChange{Name: fmt.Sprintf("dep%d", i), OldResolved: "1.0.0", NewResolved: "1.1.0"}
+	}
+	got := lockfileOnlyNames(eight)
+	for _, lc := range eight {
+		if !strings.Contains(got, lc.Name) {
+			t.Errorf("8-item list missing %q: %q", lc.Name, got)
+		}
+	}
+	if strings.Contains(got, "more") {
+		t.Errorf("8-item list must not truncate: %q", got)
+	}
+
+	// 10 entries — first 8 shown, remaining 2 summarized.
+	ten := make([]manifest.LockfileChange, 10)
+	for i := range ten {
+		ten[i] = manifest.LockfileChange{Name: fmt.Sprintf("pkg%d", i), OldResolved: "1.0.0", NewResolved: "1.1.0"}
+	}
+	got = lockfileOnlyNames(ten)
+	if !strings.Contains(got, "and 2 more") {
+		t.Errorf("10-item list: want 'and 2 more', got %q", got)
+	}
+	for _, lc := range ten[:8] {
+		if !strings.Contains(got, lc.Name) {
+			t.Errorf("10-item list missing %q: %q", lc.Name, got)
+		}
+	}
+	// Entries 8 and 9 must not appear by name (they're in the "and 2 more").
+	for _, lc := range ten[8:] {
+		if strings.Contains(got, lc.Name) {
+			t.Errorf("truncated entry %q must not appear by name: %q", lc.Name, got)
+		}
+	}
+}
+
+func TestPluralize(t *testing.T) {
+	cases := []struct {
+		n    int
+		sing string
+		pl   string
+		want string
+	}{
+		{1, "change", "changes", "1 change"},
+		{0, "change", "changes", "0 changes"},
+		{2, "change", "changes", "2 changes"},
+		{42, "trial", "trials", "42 trials"},
+	}
+	for _, tc := range cases {
+		if got := pluralize(tc.n, tc.sing, tc.pl); got != tc.want {
+			t.Errorf("pluralize(%d, %q, %q) = %q, want %q", tc.n, tc.sing, tc.pl, got, tc.want)
+		}
+	}
+}
+
+func TestShortSHA(t *testing.T) {
+	if got := shortSHA("abc123"); got != "abc123" {
+		t.Errorf("short SHA (%q): got %q, want unchanged", "abc123", got)
+	}
+	long := "abcdef123456789012345678901234567890"
+	if got := shortSHA(long); got != "abcdef123456" {
+		t.Errorf("long SHA: got %q, want first 12 chars", got)
+	}
+}
+
+func TestFirstLine(t *testing.T) {
+	cases := []struct {
+		input []byte
+		want  string
+	}{
+		{[]byte("error: install failed"), "error: install failed"},
+		{[]byte("line1\nline2\nline3"), "line1"}, // multi-line: only first
+		{[]byte(""), "no output"},                // empty
+		{[]byte("   \n  \n"), "no output"},       // whitespace-only
+		{[]byte("  trimmed  "), "trimmed"},       // surrounding whitespace trimmed
+		{[]byte("first\n"), "first"},             // trailing newline
+	}
+	for _, tc := range cases {
+		if got := firstLine(tc.input); got != tc.want {
+			t.Errorf("firstLine(%q) = %q, want %q", tc.input, got, tc.want)
 		}
 	}
 }
