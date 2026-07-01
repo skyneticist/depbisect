@@ -57,6 +57,8 @@ jobs:
           go test -run='^$' -fuzz='^FuzzParsePnpmLock$' -fuzztime=30s ./internal/manifest
           go test -run='^$' -fuzz='^FuzzParseCargoToml$' -fuzztime=30s ./internal/manifest
           go test -run='^$' -fuzz='^FuzzParseCargoLock$' -fuzztime=30s ./internal/manifest
+          go test -run='^$' -fuzz='^FuzzParsePyproject$' -fuzztime=30s ./internal/manifest
+          go test -run='^$' -fuzz='^FuzzParseUvLock$' -fuzztime=30s ./internal/manifest
 
   test:
     name: ${{ matrix.os }} / Go ${{ matrix.go }}

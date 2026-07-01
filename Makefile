@@ -88,6 +88,10 @@ fuzz: ## Fuzz each target for $(FUZZTIME) (override: make fuzz FUZZTIME=2m).
 	$(GO) test -run='^$$' -fuzz='^FuzzParsePackageJSON$$' -fuzztime=$(FUZZTIME) ./internal/manifest
 	$(GO) test -run='^$$' -fuzz='^FuzzParsePackageLock$$' -fuzztime=$(FUZZTIME) ./internal/manifest
 	$(GO) test -run='^$$' -fuzz='^FuzzParsePnpmLock$$'    -fuzztime=$(FUZZTIME) ./internal/manifest
+	$(GO) test -run='^$$' -fuzz='^FuzzParseCargoToml$$'   -fuzztime=$(FUZZTIME) ./internal/manifest
+	$(GO) test -run='^$$' -fuzz='^FuzzParseCargoLock$$'   -fuzztime=$(FUZZTIME) ./internal/manifest
+	$(GO) test -run='^$$' -fuzz='^FuzzParsePyproject$$'   -fuzztime=$(FUZZTIME) ./internal/manifest
+	$(GO) test -run='^$$' -fuzz='^FuzzParseUvLock$$'      -fuzztime=$(FUZZTIME) ./internal/manifest
 
 .PHONY: bench
 bench: ## Run all benchmarks.
