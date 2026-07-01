@@ -17,11 +17,9 @@
 
 You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 
-`git bisect` walks *commits* — it can't help when the breakage lives inside a single dependency-update commit. DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies declared in your manifest (`package.json`, `Cargo.toml`, `go.mod`, or `pyproject.toml`) between two revisions, then applies [delta debugging](https://www.cs.purdue.edu/homes/xyzhang/fall07/Papers/delta-debugging.pdf) to isolate the exact subset responsible — all inside a throwaway worktree that never touches your checkout.
+`git bisect` walks *commits* — DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies in your manifest (`package.json`, `Cargo.toml`, `go.mod`, or `pyproject.toml`) between two revisions, then narrows them to the exact minimal subset that makes your command fail — and proves no smaller set does. Every install runs in a throwaway git worktree, so it never touches your checkout.
 
-![DepBisect narrowing 12 dependency changes down to the 5-package set that broke the build](docs/assets/gifs/js/demo.gif)
-
-If DepBisect saves you a debugging session, [a star goes a long way](https://github.com/skyneticist/depbisect) — it's how other developers find it. ⭐
+![DepBisect narrowing 12 dependency changes down to the minimal 5-package set that broke the build](docs/assets/gifs/js/demo.gif)
 
 ## Features
 
@@ -36,7 +34,7 @@ If DepBisect saves you a debugging session, [a star goes a long way](https://git
 
 ## Why DepBisect
 
-**Reach for it when** a dependency-update PR (Dependabot, Renovate, or a manual bump) turns CI red and you can't tell which package did it — especially when dozens changed at once, or when the culprit only breaks in combination with another bump.
+**Reach for it when** a dependency-update PR (Dependabot, Renovate, or a manual bump) turns CI red and you can't tell which bump did it — especially when dozens changed at once, or when the culprit only breaks in combination with another bump.
 
 | Instead of…               | The catch                                                                        | DepBisect                                  |
 | ------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------ |
@@ -122,9 +120,9 @@ depbisect run --base origin/main --runs 3 -- cargo test
 depbisect run --base origin/main --runs 3 -- go test ./...
 ```
 
-The Go demos run fully offline via a generated `file://` module proxy; here DepBisect narrows twelve Go module bumps to the five-module set that breaks the build:
+The Go demos run fully offline via a generated `file://` module proxy; here DepBisect narrows 12 Go module bumps to the minimal 5-module set that breaks the build:
 
-![DepBisect narrowing twelve Go module bumps to the five-module culprit set that breaks the build](docs/assets/gifs/go/go-complex.gif)
+![DepBisect narrowing 12 Go module bumps to the minimal 5-module culprit set that breaks the build](docs/assets/gifs/go/go-complex.gif)
 
 **Working in Python?** Same flow — auto-detected from a uv project (`pyproject.toml` with a `uv.lock`):
 
@@ -329,3 +327,5 @@ each non-zero exit.
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the dev setup and
 ground rules. Licensed under the [MIT License](LICENSE).
+
+If DepBisect saved you a debugging session, a ⭐ helps other developers find it.
