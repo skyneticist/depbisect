@@ -23,6 +23,14 @@ rm -rf demo-complex
 mkdir -p demo-complex/pkgs
 ROOT=$(cd demo-complex && pwd)
 
+# Filesystem ops below use the POSIX $ROOT. npm can't resolve MSYS-style
+# /d/a/... paths in file: specs on Windows, so under Git Bash point the file:
+# deps at the native D:/a/... path ($NPM_ROOT) instead.
+NPM_ROOT=$ROOT
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) NPM_ROOT=$(cd "$ROOT" && pwd -W) ;;
+esac
+
 mkpkg() { # name version body
     mkdir -p "$ROOT/pkgs/$1-$2"
     printf '{"name":"%s","version":"%s","main":"index.js"}\n' "$1" "$2" > "$ROOT/pkgs/$1-$2/package.json"
@@ -73,22 +81,22 @@ write_manifest() { # analytics flags logger metrics request retry schema cacheR 
   "name": "demo-complex-app",
   "version": "1.0.0",
   "dependencies": {
-    "analytics-core": "file:$ROOT/pkgs/analytics-core-$1",
-    "cache-reader": "file:$ROOT/pkgs/cache-reader-$8",
-    "cache-writer": "file:$ROOT/pkgs/cache-writer-$9",
-    "feature-flags": "file:$ROOT/pkgs/feature-flags-$2",
-    "logger": "file:$ROOT/pkgs/logger-$3",
-    "request-id": "file:$ROOT/pkgs/request-id-$5",
-    "retry-policy": "file:$ROOT/pkgs/retry-policy-$6",
-    "wire-decoder": "file:$ROOT/pkgs/wire-decoder-${10}",
-    "wire-encoder": "file:$ROOT/pkgs/wire-encoder-${11}",
-    "wire-transport": "file:$ROOT/pkgs/wire-transport-${12}"
+    "analytics-core": "file:$NPM_ROOT/pkgs/analytics-core-$1",
+    "cache-reader": "file:$NPM_ROOT/pkgs/cache-reader-$8",
+    "cache-writer": "file:$NPM_ROOT/pkgs/cache-writer-$9",
+    "feature-flags": "file:$NPM_ROOT/pkgs/feature-flags-$2",
+    "logger": "file:$NPM_ROOT/pkgs/logger-$3",
+    "request-id": "file:$NPM_ROOT/pkgs/request-id-$5",
+    "retry-policy": "file:$NPM_ROOT/pkgs/retry-policy-$6",
+    "wire-decoder": "file:$NPM_ROOT/pkgs/wire-decoder-${10}",
+    "wire-encoder": "file:$NPM_ROOT/pkgs/wire-encoder-${11}",
+    "wire-transport": "file:$NPM_ROOT/pkgs/wire-transport-${12}"
   },
   "devDependencies": {
-    "schema-tools": "file:$ROOT/pkgs/schema-tools-$7"
+    "schema-tools": "file:$NPM_ROOT/pkgs/schema-tools-$7"
   },
   "optionalDependencies": {
-    "metrics-sink": "file:$ROOT/pkgs/metrics-sink-$4"
+    "metrics-sink": "file:$NPM_ROOT/pkgs/metrics-sink-$4"
   }
 }
 EOF

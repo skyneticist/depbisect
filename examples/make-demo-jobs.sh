@@ -23,6 +23,14 @@ rm -rf demo-jobs
 mkdir -p demo-jobs/pkgs
 ROOT=$(cd demo-jobs && pwd)
 
+# Filesystem ops below use the POSIX $ROOT. npm can't resolve MSYS-style
+# /d/a/... paths in file: specs on Windows, so under Git Bash the manifest
+# writer receives the native D:/a/... path ($NPM_ROOT) as ROOT instead.
+NPM_ROOT=$ROOT
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) NPM_ROOT=$(cd "$ROOT" && pwd -W) ;;
+esac
+
 # The eight interacting culprits and the ten noise packages. Kept in shell
 # variables so the package generator, manifest writer, and test all agree.
 CONSENSUS="consensus-auth consensus-codec consensus-gossip consensus-ledger consensus-router consensus-session consensus-stream consensus-sync"
@@ -59,7 +67,7 @@ git_commit() {
 # one version and every lib-* to another, spreading the noise across all three
 # dependency sections.
 write_manifest() {
-    CONSENSUS="$CONSENSUS" NOISE="$NOISE" ROOT="$ROOT" CV="$1" NV="$2" node <<'NODE'
+    CONSENSUS="$CONSENSUS" NOISE="$NOISE" ROOT="$NPM_ROOT" CV="$1" NV="$2" node <<'NODE'
 const fs = require('fs');
 const consensus = process.env.CONSENSUS.split(' ');
 const noise = process.env.NOISE.split(' ');

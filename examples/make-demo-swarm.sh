@@ -24,6 +24,14 @@ rm -rf demo-swarm
 mkdir -p demo-swarm/pkgs
 ROOT=$(cd demo-swarm && pwd)
 
+# Filesystem ops below use the POSIX $ROOT. npm can't resolve MSYS-style
+# /d/a/... paths in file: specs on Windows, so under Git Bash the manifest
+# writer receives the native D:/a/... path ($NPM_ROOT) as ROOT instead.
+NPM_ROOT=$ROOT
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) NPM_ROOT=$(cd "$ROOT" && pwd -W) ;;
+esac
+
 # The twelve interacting culprits and the sixteen noise packages. Kept in shell
 # variables so the package generator, manifest writer, and test all agree.
 REPLICAS="replica-01 replica-02 replica-03 replica-04 replica-05 replica-06 replica-07 replica-08 replica-09 replica-10 replica-11 replica-12"
@@ -60,7 +68,7 @@ git_commit() {
 # version and every lib-* to another, spreading the noise across all three
 # dependency sections.
 write_manifest() {
-    REPLICAS="$REPLICAS" NOISE="$NOISE" ROOT="$ROOT" RV="$1" NV="$2" node <<'NODE'
+    REPLICAS="$REPLICAS" NOISE="$NOISE" ROOT="$NPM_ROOT" RV="$1" NV="$2" node <<'NODE'
 const fs = require('fs');
 const replicas = process.env.REPLICAS.split(' ');
 const noise = process.env.NOISE.split(' ');

@@ -14,6 +14,14 @@ rm -rf demo
 mkdir -p demo/pkgs
 ROOT=$(cd demo && pwd)
 
+# Filesystem ops below use the POSIX $ROOT. npm can't resolve MSYS-style
+# /d/a/... paths in file: specs on Windows, so under Git Bash point the file:
+# deps at the native D:/a/... path ($NPM_ROOT) instead.
+NPM_ROOT=$ROOT
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) NPM_ROOT=$(cd "$ROOT" && pwd -W) ;;
+esac
+
 # --- local packages -----------------------------------------------------
 # alpha 1.0.0 and 1.1.0 are both fine; leftpad 2.0.0 pads the wrong side.
 for v in 1.0.0 1.1.0; do
@@ -42,8 +50,8 @@ cat > package.json <<EOF
   "name": "demo-app",
   "version": "1.0.0",
   "dependencies": {
-    "alpha": "file:$ROOT/pkgs/alpha-1.0.0",
-    "leftpad": "file:$ROOT/pkgs/leftpad-1.0.0"
+    "alpha": "file:$NPM_ROOT/pkgs/alpha-1.0.0",
+    "leftpad": "file:$NPM_ROOT/pkgs/leftpad-1.0.0"
   }
 }
 EOF
@@ -68,8 +76,8 @@ git_commit "base: working dependencies"
 node -e "
 const fs = require('fs');
 const p = JSON.parse(fs.readFileSync('package.json'));
-p.dependencies.alpha = 'file:$ROOT/pkgs/alpha-1.1.0';
-p.dependencies.leftpad = 'file:$ROOT/pkgs/leftpad-2.0.0';
+p.dependencies.alpha = 'file:$NPM_ROOT/pkgs/alpha-1.1.0';
+p.dependencies.leftpad = 'file:$NPM_ROOT/pkgs/leftpad-2.0.0';
 fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
 "
 npm install --no-audit --no-fund --loglevel=error >/dev/null
