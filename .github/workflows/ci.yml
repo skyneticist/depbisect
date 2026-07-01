@@ -524,6 +524,12 @@ jobs:
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v7
+        with:
+          # The example repo is generated after checkout and installs from
+          # committed offline wheels, so there's no dependency file to key a
+          # cache on and nothing worth caching. Disabling it silences setup-uv's
+          # "no file matched / cache will never get invalidated" warning.
+          enable-cache: false
       - name: Generate Python example repo
         run: ./examples/make-demo-python.sh
       - name: Build CLI
