@@ -116,6 +116,12 @@ type Trial struct {
 	InstallDuration time.Duration
 	VerifyDuration  time.Duration
 	Duration        time.Duration
+
+	// timedOut is set when every verification run in this trial hit the
+	// per-run timeout. Unexported so it never enters the checkpoint or report
+	// JSON; it exists only to hint, at fails-without-updates, that a too-short
+	// --run-timeout — not a broken command — is the likely cause.
+	timedOut bool
 }
 
 // Confidence states how often the final failing set reproduced the failure.
@@ -370,6 +376,9 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 		if opts.Resume {
 			cp, err := opts.Checkpoint.Load()
 			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return fail(errors.New("no checkpoint found to resume; run without --resume to start a fresh bisection"))
+				}
 				return fail(fmt.Errorf("load checkpoint: %w", err))
 			}
 			if err := validateCheckpoint(cp, fingerprint); err != nil {
@@ -482,6 +491,9 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 			"the command failed %d/%d runs with all dependency updates reverted; "+
 				"the cause is likely not a direct dependency update from this range",
 			oldTrial.Failures, oldTrial.RunsExecuted)
+		if oldTrial.timedOut {
+			res.OutcomeDetail += " (every run hit the per-run timeout — --run-timeout may be too short)"
+		}
 		res.OutcomeDetail += lockfileOnlyHint(res)
 		return finish()
 	}

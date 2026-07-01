@@ -1,19 +1,20 @@
+<div align="center">
+
+<img src="docs/assets/images/axol_detective.png" alt="DepBisect mascot — a cartoon axolotl detective in a deerstalker hat holding scissors" width="190">
+
 # DepBisect
 
-<p align="center">
-  <img src="docs/assets/images/axol_detective.png" alt="DepBisect mascot — an axolotl in a straw hat holding a coffee mug, wearing a scissors T-shirt" width="200">
-</p>
+**`git bisect`, but for dependency updates.**
 
-> **`git bisect`, but for dependency updates.** Find the smallest set of dependency changes between two Git revisions that makes a command fail — and prove it's minimal.
+Find the smallest set of dependency changes between two Git revisions that makes a command fail — and prove it's minimal.
 
-<!-- Badges render once the repository is public. -->
 [![CI](https://github.com/skyneticist/depbisect/actions/workflows/ci.yml/badge.svg)](https://github.com/skyneticist/depbisect/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/skyneticist/depbisect)](https://goreportcard.com/report/github.com/skyneticist/depbisect)
 [![Latest release](https://img.shields.io/github/v/release/skyneticist/depbisect?sort=semver)](https://github.com/skyneticist/depbisect/releases)
 [![Go 1.25+](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-                            
 
+</div>
 
 You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 

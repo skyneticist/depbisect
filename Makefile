@@ -182,6 +182,10 @@ docker-build: ## Build the Docker image as depbisect:dev.
 	$(call need,docker,see https://docs.docker.com/get-docker/)
 	docker build -t depbisect:dev .
 
+.PHONY: docker-run
+docker-run: docker-build ## Run the image against your repo (e.g. make docker-run ARGS="run --base HEAD~1 -- npm test").
+	docker run --rm -v "$$PWD:$$PWD" -w "$$PWD" depbisect:dev $(ARGS)
+
 .PHONY: docker-smoke
 docker-smoke: docker-build ## Mirror the CI docker image behaviour check (needs docker + node).
 	@mkdir -p $(BIN_DIR)

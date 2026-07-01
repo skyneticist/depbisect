@@ -108,6 +108,59 @@ func TestRenderGoMod(t *testing.T) {
 	}
 }
 
+// TestRenderGoModAddedAndRemoved covers the Added (DropRequire) and Removed
+// (AddRequire re-add) arms of RenderGoMod, which TestRenderGoMod's update-only
+// fixture does not reach. With applied empty, every change reverts: an updated
+// dep pins back, an added dep is dropped, and a removed dep is restored.
+func TestRenderGoModAddedAndRemoved(t *testing.T) {
+	const oldSrc = `module example.com/app
+
+go 1.20
+
+require (
+	github.com/alpha/one v1.0.0
+	github.com/gamma/three v1.2.0
+)
+`
+	const newSrc = `module example.com/app
+
+go 1.20
+
+require (
+	github.com/alpha/one v1.1.0
+	github.com/delta/four v1.4.0
+)
+`
+	old := mustParseGoMod(t, oldSrc)
+	new := mustParseGoMod(t, newSrc)
+	changes := DiffGo(old, new) // alpha updated, gamma removed, delta added
+
+	out, err := RenderGoMod(new, changes, map[string]bool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := mustParseGoMod(t, string(out)).Sections[GoRequire]
+	if req["github.com/alpha/one"] != "v1.0.0" {
+		t.Errorf("updated dep not reverted: alpha/one = %q, want v1.0.0", req["github.com/alpha/one"])
+	}
+	if _, ok := req["github.com/delta/four"]; ok {
+		t.Error("added dep should be dropped when not applied")
+	}
+	if req["github.com/gamma/three"] != "v1.2.0" {
+		t.Errorf("removed dep should be re-added: gamma/three = %q, want v1.2.0", req["github.com/gamma/three"])
+	}
+}
+
+// TestRenderGoModParseErrorSurfaces covers the render-time parse-error arm: a
+// GoMod whose retained bytes are not valid go.mod. It is constructed directly
+// because ParseGoMod would reject such input up front.
+func TestRenderGoModParseErrorSurfaces(t *testing.T) {
+	g := &GoMod{data: []byte("module example.com/app\n\nrequire (\n")} // unterminated block
+	if _, err := RenderGoMod(g, nil, nil); err == nil {
+		t.Fatal("RenderGoMod with invalid retained bytes succeeded, want a parse error")
+	}
+}
+
 func TestParseGoSum(t *testing.T) {
 	const goSum = `github.com/alpha/one v1.0.0 h1:aaa
 github.com/alpha/one v1.0.0/go.mod h1:bbb

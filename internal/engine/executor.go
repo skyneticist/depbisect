@@ -154,6 +154,7 @@ func (ex *executor) eval(ctx context.Context, subset []manifest.Change, role str
 	default:
 		trial.Outcome = "pass" // flaky: does not deterministically reproduce
 	}
+	trial.timedOut = verdict.AllRunsTimedOut()
 	ex.progress.Trial(num, role, len(subset), ex.totalChanges, trial.Outcome, trial.Duration)
 	ex.progress.Detail("Tested %d applied changes: %s (%s)", len(subset), trial.Outcome, verdict.String())
 	return ex.record(key, trial)

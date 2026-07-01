@@ -248,6 +248,9 @@ type fakeVerifier struct {
 	runs     int
 	failWhen func(deps map[string]string) bool
 	onVerify func()
+	// failAsTimeout makes failing runs report a per-run timeout (TimedOut set)
+	// instead of a non-zero exit code.
+	failAsTimeout bool
 	// flakyFailures, when non-nil, supplies Failures for call i (cycling).
 	flakyFailures []int
 	t             testing.TB
@@ -281,7 +284,12 @@ func (f *fakeVerifier) Verify(ctx context.Context, dir string, stopOnPass bool) 
 		if i < failures {
 			code = 1
 		}
-		v.Runs = append(v.Runs, verify.RunResult{ExitCode: code, Duration: time.Millisecond})
+		rr := verify.RunResult{ExitCode: code, Duration: time.Millisecond}
+		if code != 0 && f.failAsTimeout {
+			rr.ExitCode = 0
+			rr.TimedOut = true
+		}
+		v.Runs = append(v.Runs, rr)
 		if code != 0 {
 			v.Failures++
 		} else if stopOnPass {
@@ -810,6 +818,24 @@ func TestRunFailsAtBase(t *testing.T) {
 	}
 	if res.Outcome != OutcomeFailsAtBase {
 		t.Fatalf("outcome = %q", res.Outcome)
+	}
+}
+
+// TestRunFailsAtBaseTimeoutHint verifies that when the baseline fails purely
+// because every run timed out, the fails-without-updates detail points the user
+// at --run-timeout instead of implying a genuinely broken command.
+func TestRunFailsAtBaseTimeoutHint(t *testing.T) {
+	env := newEnv(t, threeChangeRepo(), func(map[string]string) bool { return true }, 2)
+	env.verifier.failAsTimeout = true
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeFailsAtBase {
+		t.Fatalf("outcome = %q, want %q", res.Outcome, OutcomeFailsAtBase)
+	}
+	if !strings.Contains(res.OutcomeDetail, "--run-timeout") {
+		t.Errorf("OutcomeDetail should hint at --run-timeout, got: %q", res.OutcomeDetail)
 	}
 }
 
