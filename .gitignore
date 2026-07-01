@@ -2,7 +2,6 @@
 /bin/
 /dist/
 docs/assets/vhs
-docs/assets/images
 coverage.out
 depbisect-report.md
 depbisect-report.json

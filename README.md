@@ -1,7 +1,7 @@
 # DepBisect
 
 <p align="center">
-  <img src="docs/assets/images/mascot.png" alt="DepBisect mascot — an axolotl in a straw hat holding a coffee mug, wearing a scissors T-shirt" width="200">
+  <img src="docs/assets/images/axol_detective.png" alt="DepBisect mascot — an axolotl in a straw hat holding a coffee mug, wearing a scissors T-shirt" width="200">
 </p>
 
 > **`git bisect`, but for dependency updates.** Find the smallest set of dependency changes between two Git revisions that makes a command fail — and prove it's minimal.
