@@ -78,6 +78,21 @@ func (v Verdict) String() string {
 	return fmt.Sprintf("failed %d/%d runs", v.Failures, len(v.Runs))
 }
 
+// AllRunsTimedOut reports whether every executed run hit the per-run timeout.
+// The engine uses it to explain a baseline that fails only because the command
+// never finished in time, rather than because a dependency broke it.
+func (v Verdict) AllRunsTimedOut() bool {
+	if len(v.Runs) == 0 {
+		return false
+	}
+	for _, r := range v.Runs {
+		if !r.TimedOut {
+			return false
+		}
+	}
+	return true
+}
+
 // Harness executes the verification command.
 type Harness struct {
 	Runner execx.Runner

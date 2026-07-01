@@ -2,9 +2,6 @@
 /bin/
 /dist/
 docs/assets/vhs
-# Mascot experiments stay local; the shipped hero mascot is the one exception.
-docs/assets/images/*
-!docs/assets/images/axol_detective.png
 coverage.out
 depbisect-report.md
 depbisect-report.json
