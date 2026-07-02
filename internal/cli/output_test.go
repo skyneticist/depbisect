@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -532,6 +533,62 @@ func TestFinalizeBaselineUnexpected(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "unexpected") {
 		t.Errorf("finalizeBaseline with unexpected outcome should include 'unexpected', got: %q", out)
+	}
+}
+
+// TestModernBaselineArrowsAlign pins that the → in the baseline ("reverted") and
+// reproduced ("applied") verdict rows lands in the same column, so the stacked
+// rows read as an aligned pair rather than shifting by the verb-length delta.
+func TestModernBaselineArrowsAlign(t *testing.T) {
+	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
+	arrowCol := func(role, phase string) (int, string) {
+		var buf bytes.Buffer
+		p := newProgress(&buf, false, styleModern)
+		p.modernStarted = true
+		p.finalizeBaseline(role, 2, phase)
+		plain := ansi.ReplaceAllString(buf.String(), "")
+		return strings.Index(plain, glyphArrow), plain
+	}
+	oldCol, oldLine := arrowCol("baseline-old", "pass")
+	newCol, newLine := arrowCol("baseline-new", "fail")
+	if oldCol < 0 || newCol < 0 {
+		t.Fatalf("arrow not found:\n  %q\n  %q", oldLine, newLine)
+	}
+	if oldCol != newCol {
+		t.Errorf("baseline verdict arrows misaligned (→ at col %d vs %d):\n  %q\n  %q",
+			oldCol, newCol, oldLine, newLine)
+	}
+}
+
+// TestStepArrowStyle pins that the modern style renders step arrows as the →
+// glyph (consistent with its summary) while the classic style keeps ASCII "->".
+func TestStepArrowStyle(t *testing.T) {
+	render := func(style outputStyle) string {
+		var buf bytes.Buffer
+		newProgress(&buf, false, style).Step("Compare", "%s -> %s", "HEAD~1", "HEAD")
+		return buf.String()
+	}
+	modern := render(styleModern)
+	if strings.Contains(modern, "->") || !strings.Contains(modern, glyphArrow) {
+		t.Errorf("modern Step should use →, got: %q", modern)
+	}
+	classic := render(styleClassic)
+	if !strings.Contains(classic, "->") {
+		t.Errorf("classic Step should keep ASCII '->', got: %q", classic)
+	}
+}
+
+// TestChangeVersionStrRebuilt covers the same-version arm: when both sides
+// resolve to the same version (a content- or spec-only change), the string
+// marks it "(rebuilt)" instead of the confusing "1.0.0 -> 1.0.0".
+func TestChangeVersionStrRebuilt(t *testing.T) {
+	same := manifest.Change{Name: "leftpad", Section: manifest.Dependencies, Kind: manifest.Updated, OldSpec: "1.0.0", NewSpec: "1.0.0"}
+	if got := changeVersionStr(same); got != "1.0.0 (rebuilt)" {
+		t.Errorf("changeVersionStr(old==new) = %q, want %q", got, "1.0.0 (rebuilt)")
+	}
+	diff := manifest.Change{Name: "leftpad", Section: manifest.Dependencies, Kind: manifest.Updated, OldSpec: "1.0.0", NewSpec: "2.0.0"}
+	if got := changeVersionStr(diff); got != "1.0.0 -> 2.0.0" {
+		t.Errorf("changeVersionStr(differing) = %q, want %q", got, "1.0.0 -> 2.0.0")
 	}
 }
 

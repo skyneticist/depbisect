@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/skyneticist/depbisect/internal/engine"
 	"github.com/skyneticist/depbisect/internal/manifest"
@@ -112,6 +113,11 @@ func (p *progress) modernActive() bool {
 
 func (p *progress) Step(label, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
+	// In the modern style, use the glyph arrow so a redirected modern run keeps
+	// the same → as its summary and changes, not a stray ASCII "->".
+	if p.style == styleModern {
+		msg = strings.ReplaceAll(msg, "->", glyphArrow)
+	}
 	if p.modernActive() {
 		p.modernStep(label, msg)
 		return
@@ -257,7 +263,9 @@ func (p *progress) finalizeBaseline(role string, total int, phase string) {
 	if role == "baseline-new" {
 		verb = "applied"
 	}
-	scope := fmt.Sprintf("%d updates %s", total, verb)
+	// Pad the verb to the width of the longer one ("reverted") so the → arrow
+	// lands in the same column when the baseline and reproduced rows stack.
+	scope := fmt.Sprintf("%d updates %-8s", total, verb)
 	glyph, color, verdict := glyphOK, ansiGreen, paint(ansiGreen, "tests pass")
 	if phase != "pass" {
 		glyph, color, verdict = glyphFail, ansiRed, paint(ansiRed, "tests fail")
@@ -495,14 +503,14 @@ func writeModernChanges(w io.Writer, title string, changes []manifest.Change) {
 
 	maxLen := 0
 	for _, c := range changes {
-		if n := len(c.Name); n > maxLen {
+		if n := utf8.RuneCountInString(c.Name); n > maxLen {
 			maxLen = n
 		}
 	}
 
 	for _, change := range changes {
 		prefix, leaf := splitPackageName(change.Name)
-		pad := strings.Repeat(" ", maxLen-len(change.Name)+2)
+		pad := strings.Repeat(" ", maxLen-utf8.RuneCountInString(change.Name)+2)
 		ver := changeVersionStr(change)
 		ver = strings.Replace(ver, "->", paint(ansiGray, glyphArrow), 1)
 		namePart := paint(ansiGray, prefix) + paint(ansiRed, leaf)
@@ -546,6 +554,12 @@ func changeVersionStr(c manifest.Change) string {
 		}
 		return old + " (removed)" + suffix
 	default:
+		if old == newV {
+			// Same resolved version on both sides (a content-only or spec-only
+			// change, e.g. a local file: dependency): "1.0.0 -> 1.0.0" reads as
+			// "nothing changed", so mark it instead.
+			return newV + " (rebuilt)" + suffix
+		}
 		return old + " -> " + newV + suffix
 	}
 }
