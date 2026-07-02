@@ -7,11 +7,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/skyneticist/depbisect/internal/ddmin"
+	"github.com/skyneticist/depbisect/internal/execx"
 	"github.com/skyneticist/depbisect/internal/manifest"
 	"github.com/skyneticist/depbisect/internal/verify"
 )
@@ -96,7 +97,7 @@ func (ex *executor) eval(ctx context.Context, subset []manifest.Change, role str
 		applied[c.ID()] = true
 		trial.Applied = append(trial.Applied, c.ID())
 	}
-	sort.Strings(trial.Applied)
+	slices.Sort(trial.Applied)
 
 	rendered, err := ex.eco.Render(ex.toManifest, ex.changes, applied)
 	if err != nil {
@@ -133,7 +134,7 @@ func (ex *executor) eval(ctx context.Context, subset []manifest.Change, role str
 		trial.Duration = afterInstall.Sub(start)
 		ex.progress.Trial(num, role, len(subset), ex.totalChanges, trial.Outcome, trial.Duration)
 		ex.progress.Detail("Install failed for %d applied changes (%s); candidate skipped",
-			len(subset), firstLine(instRes.Stderr))
+			len(subset), execx.FirstLineOr(instRes.Stderr, "no output"))
 		return ex.record(key, trial)
 	}
 	ex.progress.Trial(num, role, len(subset), ex.totalChanges, "verifying", afterInstall.Sub(start))
@@ -261,7 +262,7 @@ func (ex *executor) minimize(ctx context.Context, changes []manifest.Change) ([]
 	for {
 		neighbors := make([][]manifest.Change, len(bestKnown))
 		for i := range bestKnown {
-			neighbors[i] = removeChange(bestKnown, i)
+			neighbors[i] = slices.Concat(bestKnown[:i], bestKnown[i+1:])
 		}
 		sel, _, err := ex.batch(ctx, neighbors, "minimality-check", true)
 		if err != nil {

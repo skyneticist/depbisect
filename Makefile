@@ -82,6 +82,8 @@ vuln: ## Scan dependencies and stdlib for known vulnerabilities.
 	$(call need,govulncheck,go install golang.org/x/vuln/cmd/govulncheck@latest)
 	govulncheck $(PKG)
 
+# go.mod/go.sum parsing has no fuzz target by design: it delegates to
+# golang.org/x/mod, which is fuzzed upstream.
 .PHONY: fuzz
 fuzz: ## Fuzz each target for $(FUZZTIME) (override: make fuzz FUZZTIME=2m).
 	$(GO) test -run='^$$' -fuzz='^FuzzMinimize$$'         -fuzztime=$(FUZZTIME) ./internal/ddmin

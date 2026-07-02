@@ -624,38 +624,6 @@ func TestGoInstallReconcilesGoSumZipChecksums(t *testing.T) {
 	}
 }
 
-// TestFirstNonEmptyLine verifies the (string, bool) contract — especially that
-// no sentinel string escapes to the caller and that whitespace-only input is
-// correctly signaled as "no output" via the bool rather than a magic string.
-func TestFirstNonEmptyLine(t *testing.T) {
-	cases := []struct {
-		name   string
-		input  []byte
-		want   string
-		wantOK bool
-	}{
-		{"normal line", []byte("9.15.4\n"), "9.15.4", true},
-		{"leading blank lines", []byte("\n\n1.2.3\n"), "1.2.3", true},
-		{"trailing content ignored", []byte("first\nsecond\n"), "first", true},
-		{"CRLF line endings", []byte("1.0.0\r\n"), "1.0.0", true},
-		{"whitespace only", []byte("   \n\t\n  "), "", false},
-		{"empty slice", []byte(nil), "", false},
-		{"no trailing newline", []byte("1.0.0"), "1.0.0", true},
-		// Sentinel collision defense: a literal "no output" must succeed, not
-		// be misidentified as the "produced no output" error condition.
-		{"literal 'no output' string", []byte("no output\n"), "no output", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := firstNonEmptyLine(tc.input)
-			if got != tc.want || ok != tc.wantOK {
-				t.Errorf("firstNonEmptyLine(%q) = (%q, %v), want (%q, %v)",
-					tc.input, got, ok, tc.want, tc.wantOK)
-			}
-		})
-	}
-}
-
 // mustWrite writes body to path, failing the test on error.
 func mustWrite(t *testing.T, path, body string) {
 	t.Helper()

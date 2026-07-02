@@ -239,13 +239,13 @@ func (i Installer) Version(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("inspect package manager %q version: %w", i.Manager, err)
 	}
 	if res.ExitCode != 0 {
-		if stderr, ok := firstNonEmptyLine(res.Stderr); ok {
+		if stderr, ok := execx.FirstLine(res.Stderr); ok {
 			return "", fmt.Errorf("inspect package manager %q version: exit %d: %s",
 				i.Manager, res.ExitCode, stderr)
 		}
 		return "", fmt.Errorf("inspect package manager %q version: exit %d", i.Manager, res.ExitCode)
 	}
-	version, ok := firstNonEmptyLine(res.Stdout)
+	version, ok := execx.FirstLine(res.Stdout)
 	if !ok {
 		return "", fmt.Errorf("inspect package manager %q version: command produced no output", i.Manager)
 	}
@@ -289,15 +289,4 @@ func (i Installer) Install(ctx context.Context, dir string, stream io.Writer) (e
 		AllowTrustedBatch: true,
 		Stream:            stream,
 	})
-}
-
-// firstNonEmptyLine returns the first non-blank line from data and true.
-// If data contains only whitespace (or is empty), it returns ("", false).
-func firstNonEmptyLine(data []byte) (string, bool) {
-	for _, line := range strings.Split(string(data), "\n") {
-		if value := strings.TrimSpace(line); value != "" {
-			return value, true
-		}
-	}
-	return "", false
 }

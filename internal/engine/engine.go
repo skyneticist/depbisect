@@ -11,7 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -661,27 +661,8 @@ func checkpointFingerprintsEqual(a, b CheckpointFingerprint) bool {
 		a.PackageManagerVersion == b.PackageManagerVersion &&
 		a.Runs == b.Runs &&
 		a.Context == b.Context &&
-		equalStrings(a.Command, b.Command) &&
-		equalStrings(a.Changes, b.Changes)
-}
-
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func removeChange(changes []manifest.Change, index int) []manifest.Change {
-	out := make([]manifest.Change, 0, len(changes)-1)
-	out = append(out, changes[:index]...)
-	out = append(out, changes[index+1:]...)
-	return out
+		slices.Equal(a.Command, b.Command) &&
+		slices.Equal(a.Changes, b.Changes)
 }
 
 // readManifest loads and parses the ecosystem's manifest at a revision.
@@ -862,7 +843,7 @@ func subsetKey(subset []manifest.Change) string {
 
 func subsetKeyIDs(ids []string) string {
 	sorted := append([]string(nil), ids...)
-	sort.Strings(sorted)
+	slices.Sort(sorted)
 	return strings.Join(sorted, "\x00")
 }
 
@@ -899,15 +880,4 @@ func shortSHA(sha string) string {
 		return sha[:12]
 	}
 	return sha
-}
-
-func firstLine(b []byte) string {
-	s := strings.TrimSpace(string(b))
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = s[:i]
-	}
-	if s == "" {
-		return "no output"
-	}
-	return s
 }

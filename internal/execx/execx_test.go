@@ -273,3 +273,45 @@ func TestFakeRunnerHonorsContext(t *testing.T) {
 		t.Fatal("expected context error")
 	}
 }
+
+// TestFirstLine verifies the (string, bool) contract — especially that no
+// sentinel string escapes to the caller and that blank-only input is signaled
+// via the bool rather than a magic string.
+func TestFirstLine(t *testing.T) {
+	cases := []struct {
+		name   string
+		input  []byte
+		want   string
+		wantOK bool
+	}{
+		{"normal line", []byte("9.15.4\n"), "9.15.4", true},
+		{"leading blank lines", []byte("\n\n1.2.3\n"), "1.2.3", true},
+		{"trailing content ignored", []byte("first\nsecond\n"), "first", true},
+		{"CRLF line endings", []byte("1.0.0\r\n"), "1.0.0", true},
+		{"whitespace only", []byte("   \n\t\n  "), "", false},
+		{"empty slice", []byte(nil), "", false},
+		{"no trailing newline", []byte("1.0.0"), "1.0.0", true},
+		{"surrounding whitespace trimmed", []byte("  trimmed  "), "trimmed", true},
+		// Sentinel collision defense: a literal "no output" must be returned
+		// with ok=true, not be mistaken for the absence of output.
+		{"literal 'no output' string", []byte("no output\n"), "no output", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := FirstLine(tc.input)
+			if got != tc.want || ok != tc.wantOK {
+				t.Errorf("FirstLine(%q) = (%q, %v), want (%q, %v)",
+					tc.input, got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestFirstLineOr(t *testing.T) {
+	if got := FirstLineOr([]byte("error: install failed\ndetail"), "no output"); got != "error: install failed" {
+		t.Errorf("content: got %q", got)
+	}
+	if got := FirstLineOr([]byte("   \n  \n"), "no output"); got != "no output" {
+		t.Errorf("blank input: got %q, want fallback", got)
+	}
+}

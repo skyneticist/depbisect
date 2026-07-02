@@ -1,9 +1,10 @@
 package manifest
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -196,11 +197,11 @@ func lockfileOnly(old, new map[Section]map[string]string, oldR, newR Resolved, o
 			out = append(out, LockfileChange{Name: name, Section: sec, Spec: spec, OldResolved: ov, NewResolved: nv})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Name != out[j].Name {
-			return out[i].Name < out[j].Name
+	slices.SortFunc(out, func(a, b LockfileChange) int {
+		if c := cmp.Compare(a.Name, b.Name); c != 0 {
+			return c
 		}
-		return out[i].Section < out[j].Section
+		return cmp.Compare(a.Section, b.Section)
 	})
 	return out
 }
