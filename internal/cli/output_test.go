@@ -828,3 +828,101 @@ func TestPrintModernSummaryFactsManagerTrialsDiagnostics(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Cylon eye — sweep geometry, fade rendering, and the animation ticker
+// ---------------------------------------------------------------------------
+
+func TestEyePosBounces(t *testing.T) {
+	width := 4 // period 6: 0 1 2 3 2 1, repeating
+	want := []int{0, 1, 2, 3, 2, 1, 0, 1, 2}
+	for tick, w := range want {
+		if got := eyePos(tick, width); got != w {
+			t.Errorf("eyePos(%d, %d) = %d, want %d", tick, width, got, w)
+		}
+	}
+	// Negative ticks (the trail's lookback before the first frames) must
+	// normalize into range rather than going negative.
+	for tick := -4; tick < 0; tick++ {
+		if got := eyePos(tick, width); got < 0 || got >= width {
+			t.Errorf("eyePos(%d, %d) = %d, out of range", tick, width, got)
+		}
+	}
+	if got := eyePos(7, 1); got != 0 {
+		t.Errorf("eyePos(width 1) = %d, want 0", got)
+	}
+}
+
+func TestIndeterminateBarCylon(t *testing.T) {
+	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
+	var buf bytes.Buffer
+	p := newProgress(&buf, false, styleModern)
+
+	p.barTick = 5 // mid-sweep, moving right: head 5, tail at 4 and 3
+	runes := []rune(ansi.ReplaceAllString(p.indeterminateBar(12), ""))
+	if len(runes) != 12 {
+		t.Fatalf("bar width = %d, want 12", len(runes))
+	}
+	if runes[5] != '█' || runes[4] != '▓' || runes[3] != '▒' {
+		t.Errorf("mid-sweep eye = %q, want head █ at 5, tail ▓ at 4 and ▒ at 3", string(runes))
+	}
+
+	p.barTick = 12 // one tick past the right edge: head at 10, moving left
+	runes = []rune(ansi.ReplaceAllString(p.indeterminateBar(12), ""))
+	if runes[10] != '█' || runes[11] != '▓' {
+		t.Errorf("post-bounce eye = %q, want head █ at 10, tail ▓ at 11", string(runes))
+	}
+	// Two ticks ago the head was on cell 10 itself (the bounce), so the ▒
+	// trail cell is masked by the head and every other cell stays dim.
+	for i, r := range runes {
+		if i != 10 && i != 11 && r != '░' {
+			t.Errorf("post-bounce cell %d = %q, want ░", i, r)
+		}
+	}
+}
+
+// TestDdminTickerAnimatesAndStops covers the animation lifecycle: a candidate
+// trial on an interactive terminal starts the frame ticker, frames advance
+// with no further engine events, and the ddmin completion row stops the
+// ticker so nothing can draw over subsequent output.
+func TestDdminTickerAnimatesAndStops(t *testing.T) {
+	var buf bytes.Buffer
+	p := newProgress(&buf, false, styleModern)
+	p.interactive = true // buffer-backed: pretend to be a TTY
+	p.color = true
+	p.frame = 2 * time.Millisecond
+
+	p.Trial(1, "candidate", 1, 3, "preparing", 0)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		p.mu.Lock()
+		ticks := p.barTick
+		p.mu.Unlock()
+		if ticks >= 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("animation ticker never advanced barTick")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	p.Step("Complete", "minimal failing set contains 1 of 3 changes")
+	p.mu.Lock()
+	stopped := p.tickerStop == nil
+	p.mu.Unlock()
+	if !stopped {
+		t.Fatal("ticker still running after Complete")
+	}
+	// Every ticker write happened under p.mu, which this goroutine has since
+	// acquired; with the ticker stopped the buffer must now be stable.
+	n := buf.Len()
+	time.Sleep(20 * time.Millisecond)
+	if buf.Len() != n {
+		t.Errorf("output grew after Complete: %d -> %d bytes", n, buf.Len())
+	}
+	if !strings.Contains(buf.String(), "ddmin") {
+		t.Errorf("expected final ddmin row, got: %q", buf.String())
+	}
+}

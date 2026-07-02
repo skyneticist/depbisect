@@ -1153,3 +1153,35 @@ func TestWriteJSONReportEncodeError(t *testing.T) {
 		t.Errorf("no file should be written on encode failure (stat err: %v)", statErr)
 	}
 }
+
+func TestParseRunJobsEnv(t *testing.T) {
+	t.Setenv("DEPBISECT_JOBS", "")
+
+	opts, err := parseRunArgs([]string{"--base", "main", "--", "x"})
+	if err != nil || opts.jobs != 1 {
+		t.Fatalf("default jobs = %d, err = %v; want 1", opts.jobs, err)
+	}
+
+	t.Setenv("DEPBISECT_JOBS", "4")
+	opts, err = parseRunArgs([]string{"--base", "main", "--", "x"})
+	if err != nil || opts.jobs != 4 {
+		t.Fatalf("env jobs = %d, err = %v; want 4", opts.jobs, err)
+	}
+
+	opts, err = parseRunArgs([]string{"--base", "main", "--jobs", "2", "--", "x"})
+	if err != nil || opts.jobs != 2 {
+		t.Fatalf("--jobs should override env: jobs = %d, err = %v", opts.jobs, err)
+	}
+
+	opts, err = parseRunArgs([]string{"--base", "main", "-j", "3", "--", "x"})
+	if err != nil || opts.jobs != 3 {
+		t.Fatalf("-j should override env: jobs = %d, err = %v", opts.jobs, err)
+	}
+
+	for _, bad := range []string{"0", "-2", "two"} {
+		t.Setenv("DEPBISECT_JOBS", bad)
+		if _, err := parseRunArgs([]string{"--base", "main", "--", "x"}); err == nil {
+			t.Errorf("DEPBISECT_JOBS=%q should error", bad)
+		}
+	}
+}
