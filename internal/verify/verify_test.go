@@ -147,8 +147,10 @@ func TestVerdictStrings(t *testing.T) {
 	if got := v.String(); got != "failed 3/3 runs" {
 		t.Errorf("String() = %q", got)
 	}
+	// StopOnPass ended verification after the second run: the shortened
+	// denominator must be labeled so it is not read as a full sample.
 	v = Verdict{Planned: 3, Runs: []RunResult{{ExitCode: 1}, {ExitCode: 0}}, Failures: 1}
-	if got := v.String(); got != "failed 1/2 runs" {
+	if got := v.String(); got != "failed 1/2 runs (stopped at first pass; 3 planned)" {
 		t.Errorf("String() = %q", got)
 	}
 }

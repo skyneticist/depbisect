@@ -73,9 +73,16 @@ func (v Verdict) Classification() Classification {
 	}
 }
 
-// String renders e.g. "failed 3/3 runs".
+// String renders e.g. "failed 3/3 runs". When StopOnPass ended verification
+// before every planned run executed, it says so — "failed 0/1 runs (stopped
+// at first pass; 3 planned)" — so a short denominator is not mistaken for a
+// full flakiness sample.
 func (v Verdict) String() string {
-	return fmt.Sprintf("failed %d/%d runs", v.Failures, len(v.Runs))
+	s := fmt.Sprintf("failed %d/%d runs", v.Failures, len(v.Runs))
+	if v.Planned > len(v.Runs) {
+		s += fmt.Sprintf(" (stopped at first pass; %d planned)", v.Planned)
+	}
+	return s
 }
 
 // AllRunsTimedOut reports whether every executed run hit the per-run timeout.
