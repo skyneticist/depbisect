@@ -1,16 +1,36 @@
-# depbisect
+<p align="center">
+  <img src="../ /main/docs/assets/images/axol_detective.png" alt="DepBisect mascot — a cartoon axolotl detective in a deerstalker hat holding scissors" width="180">
+</p>
 
-> **git bisect, but for dependency updates.** Find the smallest set of dependency changes between two Git revisions that makes a command fail — and prove it's minimal.
+<h1 align="center">DepBisect</h1>
 
-[![CI](https://github.com/skyneticist/depbisect/actions/workflows/ci.yml/badge.svg)](https://github.com/skyneticist/depbisect/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/skyneticist/depbisect?sort=semver)](https://github.com/skyneticist/depbisect/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/skyneticist/depbisect/blob/main/LICENSE)
+<p align="center">
+  <strong><code>git bisect</code>, but for dependency updates.</strong><br>
+  Find the smallest set of dependency changes between two Git revisions that makes a command fail — and prove it's minimal.
+</p>
+
+<p align="center">
+  <a href="https://github.com/skyneticist/depbisect/actions/workflows/ci.yml"><img src="https://github.com/skyneticist/depbisect/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/skyneticist/depbisect/releases"><img src="https://img.shields.io/github/v/release/skyneticist/depbisect?sort=semver" alt="Latest release"></a>
+  <a href="https://github.com/skyneticist/depbisect/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+</p>
 
 You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 
-`git bisect` walks *commits* — it can't help when the breakage lives inside a single dependency-update commit. DepBisect bisects the *dependency changes themselves*, using [delta debugging](https://www.cs.purdue.edu/homes/xyzhang/fall07/Papers/delta-debugging.pdf) to isolate the exact subset responsible — all inside a throwaway worktree that never touches your checkout.
+`git bisect` walks *commits* — DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies in your manifest (`package.json`, `Cargo.toml`, `go.mod`, or `pyproject.toml`) between two revisions, then narrows them to the exact minimal subset that makes your command fail — and proves no smaller set does. Every install runs in a throwaway git worktree, so it never touches your checkout.
 
-![DepBisect narrowing 12 dependency changes down to the 5-package set that broke the build](https://raw.githubusercontent.com/skyneticist/depbisect/main/docs/assets/gifs/js/demo.gif)
+![DepBisect narrowing 12 dependency changes down to the minimal 5-package set that broke the build](https://raw.githubusercontent.com/skyneticist/depbisect/main/docs/assets/gifs/js/demo.gif)
+
+## Why DepBisect
+
+**Reach for it when** a dependency-update PR (Dependabot, Renovate, or a manual bump) turns CI red and you can't tell which bump did it — especially when dozens changed at once, or when the culprit only breaks in combination with another bump.
+
+| Instead of…               | The catch                                                                         | DepBisect                                  |
+| ------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------ |
+| `git bisect`              | Bisects *commits* — useless when the break is inside one dependency-bump commit   | Bisects the dependency changes themselves  |
+| Reverting bumps by hand   | O(n) reinstalls, easy to miss interacting deps, no proof you found the real cause | `ddmin` + an automatic 1-minimality proof  |
+| Reading the lockfile diff | Shows *what* resolved differently, not *what broke*                               | Pinpoints the exact minimal breaking set   |
+| `npm why` / `npm ls`      | Explains the dependency tree, not the failure                                     | Ties the failure to specific version bumps |
 
 ## How it works
 
