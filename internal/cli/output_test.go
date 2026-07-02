@@ -560,6 +560,38 @@ func TestModernBaselineArrowsAlign(t *testing.T) {
 	}
 }
 
+// TestStepArrowStyle pins that the modern style renders step arrows as the →
+// glyph (consistent with its summary) while the classic style keeps ASCII "->".
+func TestStepArrowStyle(t *testing.T) {
+	render := func(style outputStyle) string {
+		var buf bytes.Buffer
+		newProgress(&buf, false, style).Step("Compare", "%s -> %s", "HEAD~1", "HEAD")
+		return buf.String()
+	}
+	modern := render(styleModern)
+	if strings.Contains(modern, "->") || !strings.Contains(modern, glyphArrow) {
+		t.Errorf("modern Step should use →, got: %q", modern)
+	}
+	classic := render(styleClassic)
+	if !strings.Contains(classic, "->") {
+		t.Errorf("classic Step should keep ASCII '->', got: %q", classic)
+	}
+}
+
+// TestChangeVersionStrRebuilt covers the same-version arm: when both sides
+// resolve to the same version (a content- or spec-only change), the string
+// marks it "(rebuilt)" instead of the confusing "1.0.0 -> 1.0.0".
+func TestChangeVersionStrRebuilt(t *testing.T) {
+	same := manifest.Change{Name: "leftpad", Section: manifest.Dependencies, Kind: manifest.Updated, OldSpec: "1.0.0", NewSpec: "1.0.0"}
+	if got := changeVersionStr(same); got != "1.0.0 (rebuilt)" {
+		t.Errorf("changeVersionStr(old==new) = %q, want %q", got, "1.0.0 (rebuilt)")
+	}
+	diff := manifest.Change{Name: "leftpad", Section: manifest.Dependencies, Kind: manifest.Updated, OldSpec: "1.0.0", NewSpec: "2.0.0"}
+	if got := changeVersionStr(diff); got != "1.0.0 -> 2.0.0" {
+		t.Errorf("changeVersionStr(differing) = %q, want %q", got, "1.0.0 -> 2.0.0")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // modernStep — Resume branch (called directly, bypassing modernActive check)
 // ---------------------------------------------------------------------------
