@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -33,14 +34,19 @@ const (
 )
 
 const (
-	ansiReset  = "\x1b[0m"
-	ansiBold   = "\x1b[1m"
-	ansiCyan   = "\x1b[1;36m"
-	ansiGreen  = "\x1b[1;32m"
-	ansiRed    = "\x1b[1;31m"
-	ansiYellow = "\x1b[1;33m"
-	ansiGray   = "\x1b[90m"
+	ansiReset   = "\x1b[0m"
+	ansiBold    = "\x1b[1m"
+	ansiCyan    = "\x1b[1;36m"
+	ansiCyanDim = "\x1b[36m" // non-bold cyan: the fading tail of the ddmin eye
+	ansiGreen   = "\x1b[1;32m"
+	ansiRed     = "\x1b[1;31m"
+	ansiYellow  = "\x1b[1;33m"
+	ansiGray    = "\x1b[90m"
 )
+
+// barFrameInterval is the frame period of the live ddmin animation (~10 fps).
+// Frames redraw one short stderr line on an interactive terminal only.
+const barFrameInterval = 100 * time.Millisecond
 
 // Glyphs used by the modern style. They render only when color is active,
 // which in practice means a real terminal; classic output stays glyph-free.
@@ -78,12 +84,23 @@ func paint(code, s string) string { return code + s + ansiReset }
 // progress prints phase updates to stderr. A TTY refreshes the active trial
 // in place; redirected output stays line-oriented for CI logs. Verbose mode
 // always preserves every lifecycle phase.
+//
+// Methods are safe for concurrent use: mu serializes every terminal write, so
+// frames drawn by the animation goroutine (see startTicker) can never
+// interleave with engine-driven progress rows.
 type progress struct {
 	w           io.Writer
 	verbose     bool
 	interactive bool
 	color       bool
 	style       outputStyle
+	// frame is the live-animation frame period; tests shorten it.
+	frame time.Duration
+
+	// mu guards every field below and all writes to w. The exported-style
+	// entry points (Step, Detail, Trial, clearActiveTrial) acquire it; the
+	// unexported helpers below them assume it is held.
+	mu          sync.Mutex
 	activeTrial bool
 
 	// modern lifecycle state for the collapsed ddmin row.
@@ -91,6 +108,9 @@ type progress struct {
 	ddminStart    time.Time
 	ddminTested   int
 	barTick       int
+	// tickerStop, when non-nil, is the stop channel of the running animation
+	// goroutine. Owned exclusively by startTicker/stopTicker.
+	tickerStop chan struct{}
 }
 
 func newProgress(w io.Writer, verbose bool, style outputStyle) *progress {
@@ -101,6 +121,7 @@ func newProgress(w io.Writer, verbose bool, style outputStyle) *progress {
 		interactive: interactive,
 		color:       color,
 		style:       style,
+		frame:       barFrameInterval,
 	}
 }
 
@@ -112,6 +133,8 @@ func (p *progress) modernActive() bool {
 }
 
 func (p *progress) Step(label, format string, args ...any) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	msg := fmt.Sprintf(format, args...)
 	// In the modern style, use the glyph arrow so a redirected modern run keeps
 	// the same → as its summary and changes, not a stray ASCII "->". Only the
@@ -125,7 +148,7 @@ func (p *progress) Step(label, format string, args ...any) {
 		p.modernStep(label, msg)
 		return
 	}
-	p.clearActiveTrial()
+	p.interrupt()
 	writeStatus(p.w, label, msg, p.color, ansiCyan, true)
 }
 
@@ -133,11 +156,15 @@ func (p *progress) Detail(format string, args ...any) {
 	if !p.verbose {
 		return
 	}
-	p.clearActiveTrial()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.interrupt()
 	fmt.Fprintf(p.w, "%*s %s\n", statusWidth, "", fmt.Sprintf(format, args...))
 }
 
 func (p *progress) Trial(number int, role string, applied, total int, phase string, elapsed time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.modernActive() {
 		p.modernTrial(role, total, phase)
 		return
@@ -151,7 +178,7 @@ func (p *progress) Trial(number int, role string, applied, total int, phase stri
 			message += " | " + rounded.String() + " elapsed"
 		}
 		if p.interactive && !p.verbose {
-			p.clearActiveTrial()
+			p.interrupt()
 			writeLiveStatus(p.w, fmt.Sprintf("Trial %d", number), message, p.color, ansiCyan)
 			p.activeTrial = true
 			return
@@ -162,7 +189,7 @@ func (p *progress) Trial(number int, role string, applied, total int, phase stri
 		return
 	}
 
-	p.clearActiveTrial()
+	p.interrupt()
 	expectation := trialExpectation(role, phase)
 	status := strings.ToUpper(phase)
 	statusColor := outcomeColor(phase)
@@ -181,12 +208,79 @@ func (p *progress) Trial(number int, role string, applied, total int, phase stri
 		p.color, statusColor, true)
 }
 
+// clearActiveTrial stops the live animation and erases the in-place trial
+// line. It is the external interruption point — the CLI calls it before
+// printing an error — and acquires the lock; internal writers use interrupt.
 func (p *progress) clearActiveTrial() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.interrupt()
+}
+
+// interrupt stops the frame ticker and clears the live line so an ordinary
+// row can be printed. Caller holds p.mu.
+func (p *progress) interrupt() {
+	p.stopTicker()
+	p.clearLine()
+}
+
+// clearLine erases the in-place live row, if any. Unlike interrupt it leaves
+// a running ticker alone; frame redraws use it to repaint without stopping
+// their own animation. Caller holds p.mu.
+func (p *progress) clearLine() {
 	if !p.interactive || !p.activeTrial {
 		return
 	}
 	fmt.Fprint(p.w, "\r\x1b[2K")
 	p.activeTrial = false
+}
+
+// startTicker begins the animation loop that sweeps the ddmin eye and keeps
+// the elapsed time live between trial events. It is a no-op when already
+// running or when the writer is not an interactive terminal (CI, redirected
+// output, and tests never animate). Caller holds p.mu.
+func (p *progress) startTicker() {
+	if p.tickerStop != nil || !p.interactive {
+		return
+	}
+	stop := make(chan struct{})
+	p.tickerStop = stop
+	interval := p.frame
+	if interval <= 0 {
+		// A zero-value progress (constructed without newProgress) still
+		// animates at the standard rate rather than panicking NewTicker.
+		interval = barFrameInterval
+	}
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				p.mu.Lock()
+				if p.tickerStop != stop {
+					// Stopped between this tick firing and acquiring the
+					// lock; the row now belongs to whoever stopped us.
+					p.mu.Unlock()
+					return
+				}
+				p.barTick++
+				p.refreshDdmin()
+				p.mu.Unlock()
+			}
+		}
+	}()
+}
+
+// stopTicker halts the animation loop, if running. Caller holds p.mu; once
+// the owning lock is released, no further frames will be drawn.
+func (p *progress) stopTicker() {
+	if p.tickerStop != nil {
+		close(p.tickerStop)
+		p.tickerStop = nil
+	}
 }
 
 // modernBegin emits a single blank line before the first modern progress row so
@@ -207,14 +301,14 @@ func (p *progress) modernStep(label, msg string) {
 	p.modernBegin()
 	switch label {
 	case "Complete":
-		p.clearActiveTrial()
+		p.interrupt()
 		color := ansiGreen
 		if strings.Contains(msg, "not proven") {
 			color = ansiYellow
 		}
 		p.writeModernRow(glyphOK, color, "ddmin", paint(ansiGray, msg))
 	case "Resume":
-		p.clearActiveTrial()
+		p.interrupt()
 		p.writeModernRow(glyphActive, ansiCyan, "resume", paint(ansiGray, msg))
 	}
 }
@@ -254,14 +348,14 @@ func modernRoleLabel(role string) string {
 }
 
 func (p *progress) refreshBaselineWorking(role, phase string) {
-	p.clearActiveTrial()
+	p.interrupt()
 	fmt.Fprintf(p.w, "%s %-*s %s",
 		paint(ansiCyan, glyphActive), modernLabelWidth, modernRoleLabel(role), paint(ansiGray, phase+"…"))
 	p.activeTrial = true
 }
 
 func (p *progress) finalizeBaseline(role string, total int, phase string) {
-	p.clearActiveTrial()
+	p.interrupt()
 	verb := "reverted"
 	if role == "baseline-new" {
 		verb = "applied"
@@ -280,8 +374,11 @@ func (p *progress) finalizeBaseline(role string, total int, phase string) {
 	p.writeModernRow(glyph, color, modernRoleLabel(role), msg)
 }
 
+// refreshDdmin repaints the live ddmin row and ensures the animation ticker
+// is running; the ticker advances barTick and calls back in for each frame.
+// Caller holds p.mu.
 func (p *progress) refreshDdmin() {
-	p.clearActiveTrial()
+	p.clearLine()
 	elapsed := formatDuration(time.Since(p.ddminStart))
 	status := fmt.Sprintf("%s %d tested · %s",
 		paint(ansiCyan, "isolating…"), p.ddminTested, paint(ansiGray, elapsed))
@@ -292,29 +389,54 @@ func (p *progress) refreshDdmin() {
 	fmt.Fprintf(p.w, "%s %-*s %s%s",
 		paint(ansiCyan, glyphActive), modernLabelWidth, "ddmin", bar, status)
 	p.activeTrial = true
-	p.barTick++
+	p.startTicker()
 }
 
-// indeterminateBar renders a moving "comet" since ddmin cannot know how many
-// probes remain; it conveys activity, not a percentage.
+// indeterminateBar renders a "cylon eye": a bright head sweeping back and
+// forth with a two-cell tail fading behind it. It conveys activity, not a
+// percentage — ddmin cannot know how many probes remain. Motion comes from
+// the frame ticker advancing barTick; the tail cells are simply the head's
+// two previous positions, which keeps the fade correct through edge bounces
+// (where the head masks its own trail).
 func (p *progress) indeterminateBar(width int) string {
-	const comet = 3
-	pos := p.barTick % width
+	head := eyePos(p.barTick, width)
+	trail1, trail2 := -1, -1
+	if p.barTick >= 1 {
+		trail1 = eyePos(p.barTick-1, width)
+	}
+	if p.barTick >= 2 {
+		trail2 = eyePos(p.barTick-2, width)
+	}
 	var b strings.Builder
 	for i := 0; i < width; i++ {
-		lit := false
-		for c := 0; c < comet; c++ {
-			if (pos+c)%width == i {
-				lit = true
-			}
-		}
-		if lit {
+		switch i {
+		case head:
 			b.WriteString(paint(ansiCyan, "█"))
-		} else {
+		case trail1:
+			b.WriteString(paint(ansiCyanDim, "▓"))
+		case trail2:
+			b.WriteString(paint(ansiCyanDim, "▒"))
+		default:
 			b.WriteString(paint(ansiGray, "░"))
 		}
 	}
 	return b.String()
+}
+
+// eyePos maps a tick to the eye's cell via a triangle wave — 0,1,…,w-1,w-2,
+// …,1 and repeat — so the eye bounces at the edges instead of wrapping.
+// Negative ticks (the trail's lookback before the first frames) normalize
+// into the same cycle.
+func eyePos(tick, width int) int {
+	if width <= 1 {
+		return 0
+	}
+	period := 2 * (width - 1)
+	pos := ((tick % period) + period) % period
+	if pos >= width {
+		pos = period - pos
+	}
+	return pos
 }
 
 func (p *progress) writeModernRow(glyph, glyphColor, label, msg string) {

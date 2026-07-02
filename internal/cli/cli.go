@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,9 +61,10 @@ Flags for run:
   --runs <n>            verification runs per candidate; raises confidence
                         for flaky tests (default 1)
   --jobs, -j <n>        candidate trials to evaluate in parallel, each in its
-                        own worktree (default 1). The minimal set is identical
-                        at any value; requires the verification command to be
-                        safe to run concurrently (no shared ports/files/state)
+                        own worktree (default 1; also set with DEPBISECT_JOBS).
+                        The minimal set is identical at any value; requires the
+                        verification command to be safe to run concurrently
+                        (no shared ports/files/state)
   --run-timeout <dur>   timeout per verification run, e.g. 10m (default none)
   --install-timeout <dur>
                         timeout per dependency install (default none)
@@ -208,6 +210,28 @@ func parseRunArgs(args []string) (*runOptions, error) {
 		return nil, err
 	}
 	opts.style = style
+
+	// Precedence: --jobs/-j flag, then DEPBISECT_JOBS, then 1. The tool never
+	// defaults above one lane itself — parallel trials require a verification
+	// command that is safe to run concurrently, and a collision-induced
+	// failure would silently corrupt the minimal set. The environment variable
+	// lets users who know their commands are parallel-safe raise their own
+	// default.
+	jobsSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "jobs" || f.Name == "j" {
+			jobsSet = true
+		}
+	})
+	if !jobsSet {
+		if env := os.Getenv("DEPBISECT_JOBS"); env != "" {
+			n, err := strconv.Atoi(env)
+			if err != nil || n < 1 {
+				return nil, fmt.Errorf("invalid DEPBISECT_JOBS %q (must be a positive integer)", env)
+			}
+			opts.jobs = n
+		}
+	}
 
 	extra := fs.Args()
 	if !hasSep {
