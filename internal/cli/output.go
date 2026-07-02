@@ -114,9 +114,12 @@ func (p *progress) modernActive() bool {
 func (p *progress) Step(label, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	// In the modern style, use the glyph arrow so a redirected modern run keeps
-	// the same → as its summary and changes, not a stray ASCII "->".
+	// the same → as its summary and changes, not a stray ASCII "->". Only the
+	// space-delimited token is rewritten: it appears solely in the engine's own
+	// message templates, while interpolated values (revisions, SHAs, package
+	// names) can never contain spaces, so their content is left untouched.
 	if p.style == styleModern {
-		msg = strings.ReplaceAll(msg, "->", glyphArrow)
+		msg = strings.ReplaceAll(msg, " -> ", " "+glyphArrow+" ")
 	}
 	if p.modernActive() {
 		p.modernStep(label, msg)
@@ -511,8 +514,11 @@ func writeModernChanges(w io.Writer, title string, changes []manifest.Change) {
 	for _, change := range changes {
 		prefix, leaf := splitPackageName(change.Name)
 		pad := strings.Repeat(" ", maxLen-utf8.RuneCountInString(change.Name)+2)
+		// changeVersionStr is the only source of the space-delimited " -> "
+		// token; no version-spec syntax produces it (range specs may contain
+		// spaces, but never "->"), so spec content cannot be rewritten.
 		ver := changeVersionStr(change)
-		ver = strings.Replace(ver, "->", paint(ansiGray, glyphArrow), 1)
+		ver = strings.Replace(ver, " -> ", " "+paint(ansiGray, glyphArrow)+" ", 1)
 		namePart := paint(ansiGray, prefix) + paint(ansiRed, leaf)
 		fmt.Fprintf(w, "%*s%s %s%s%s\n", modernGutter*2, "", paint(ansiRed, glyphFail), namePart, pad, paint(ansiGray, ver))
 	}
@@ -534,9 +540,9 @@ func splitPackageName(name string) (prefix, leaf string) {
 // changeVersionStr returns the version portion of a change for terminal
 // display, mirroring the logic in Change.String() but without the name.
 func changeVersionStr(c manifest.Change) string {
-	old, newV := c.OldSpec, c.NewSpec
+	oldV, newV := c.OldSpec, c.NewSpec
 	if c.OldResolved != "" && c.NewResolved != "" {
-		old, newV = c.OldResolved, c.NewResolved
+		oldV, newV = c.OldResolved, c.NewResolved
 	}
 	suffix := ""
 	if c.Section != manifest.Dependencies {
@@ -550,17 +556,17 @@ func changeVersionStr(c manifest.Change) string {
 		return newV + " (added)" + suffix
 	case manifest.Removed:
 		if c.OldResolved != "" {
-			old = c.OldResolved
+			oldV = c.OldResolved
 		}
-		return old + " (removed)" + suffix
+		return oldV + " (removed)" + suffix
 	default:
-		if old == newV {
+		if oldV == newV {
 			// Same resolved version on both sides (a content-only or spec-only
 			// change, e.g. a local file: dependency): "1.0.0 -> 1.0.0" reads as
 			// "nothing changed", so mark it instead.
 			return newV + " (rebuilt)" + suffix
 		}
-		return old + " -> " + newV + suffix
+		return oldV + " -> " + newV + suffix
 	}
 }
 
@@ -723,8 +729,11 @@ func commandArgNeedsQuote(arg string) bool {
 	return false
 }
 
+// wrapWords greedily wraps text at word boundaries. Width is measured in
+// runes, not bytes, so multi-byte characters (like the → glyph) do not cause
+// premature wrapping.
 func wrapWords(text string, width int) []string {
-	if width < 1 || len(text) <= width {
+	if width < 1 || utf8.RuneCountInString(text) <= width {
 		return []string{text}
 	}
 	words := strings.Fields(text)
@@ -733,13 +742,16 @@ func wrapWords(text string, width int) []string {
 	}
 	lines := make([]string, 0, len(words))
 	line := words[0]
+	lineLen := utf8.RuneCountInString(line)
 	for _, word := range words[1:] {
-		if len(line)+1+len(word) <= width {
+		wordLen := utf8.RuneCountInString(word)
+		if lineLen+1+wordLen <= width {
 			line += " " + word
+			lineLen += 1 + wordLen
 			continue
 		}
 		lines = append(lines, line)
-		line = word
+		line, lineLen = word, wordLen
 	}
 	return append(lines, line)
 }

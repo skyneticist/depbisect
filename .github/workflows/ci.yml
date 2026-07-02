@@ -49,6 +49,8 @@ jobs:
           go-version: stable
       # Short smoke run; the seed corpora also run as part of the test job.
       # Lengthen -fuzztime, or move to a scheduled workflow, for deeper runs.
+      # go.mod/go.sum parsing has no fuzz target by design: it delegates to
+      # golang.org/x/mod, which is fuzzed upstream.
       - name: Fuzz ddmin and the manifest parsers
         run: |
           go test -run='^$' -fuzz='^FuzzMinimize$' -fuzztime=30s ./internal/ddmin

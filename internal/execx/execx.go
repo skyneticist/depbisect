@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -122,6 +123,28 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 }
 
 func (b *tailBuffer) Bytes() []byte { return b.buf }
+
+// FirstLine returns the first non-blank line of output and true; when output
+// contains only blank lines it returns ("", false). Callers that need to
+// distinguish "no output" from real content must use the bool — the returned
+// string is never a sentinel.
+func FirstLine(output []byte) (string, bool) {
+	for _, line := range strings.Split(string(output), "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			return s, true
+		}
+	}
+	return "", false
+}
+
+// FirstLineOr returns the first non-blank line of output, or fallback when
+// there is none. Subprocess failure messages use it to stay one terse line.
+func FirstLineOr(output []byte, fallback string) string {
+	if line, ok := FirstLine(output); ok {
+		return line
+	}
+	return fallback
+}
 
 // syncWriter serializes writes from the stdout and stderr pipe goroutines.
 type syncWriter struct {

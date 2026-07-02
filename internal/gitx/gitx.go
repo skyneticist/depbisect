@@ -128,7 +128,7 @@ func (g *Git) RecentCommitsTouching(ctx context.Context, rev string, paths []str
 		return nil, fmt.Errorf("list recent commits: %w", err)
 	}
 	if res.ExitCode != 0 {
-		return nil, fmt.Errorf("list recent commits: %s", firstLine(res.Stderr))
+		return nil, fmt.Errorf("list recent commits: %s", execx.FirstLineOr(res.Stderr, "no output"))
 	}
 	return parseCommitLog(res.Stdout), nil
 }
@@ -166,7 +166,7 @@ func (g *Git) ShowFile(ctx context.Context, rev, path string) ([]byte, error) {
 		return nil, fmt.Errorf("read %s at %s: %w", path, rev, err)
 	}
 	if res.ExitCode != 0 {
-		return nil, fmt.Errorf("read %s at %s: %s", path, rev, firstLine(res.Stderr))
+		return nil, fmt.Errorf("read %s at %s: %s", path, rev, execx.FirstLineOr(res.Stderr, "no output"))
 	}
 	return res.Stdout, nil
 }
@@ -207,7 +207,7 @@ func (g *Git) AddWorktree(ctx context.Context, dir, rev string) error {
 		return fmt.Errorf("add worktree at %s: %w", dir, err)
 	}
 	if res.ExitCode != 0 {
-		return fmt.Errorf("add worktree at %s for %s: %s", dir, rev, firstLine(res.Stderr))
+		return fmt.Errorf("add worktree at %s for %s: %s", dir, rev, execx.FirstLineOr(res.Stderr, "no output"))
 	}
 	return nil
 }
@@ -228,7 +228,7 @@ func (g *Git) ResetWorktree(ctx context.Context, dir, rev string) error {
 		return fmt.Errorf("reset worktree %s: %w", dir, err)
 	}
 	if reset.ExitCode != 0 {
-		return fmt.Errorf("reset worktree %s to %s: %s", dir, rev, firstLine(reset.Stderr))
+		return fmt.Errorf("reset worktree %s to %s: %s", dir, rev, execx.FirstLineOr(reset.Stderr, "no output"))
 	}
 	clean, err := g.runner.Run(ctx, execx.Cmd{
 		Dir:  dir,
@@ -239,7 +239,7 @@ func (g *Git) ResetWorktree(ctx context.Context, dir, rev string) error {
 		return fmt.Errorf("clean worktree %s: %w", dir, err)
 	}
 	if clean.ExitCode != 0 {
-		return fmt.Errorf("clean worktree %s: %s", dir, firstLine(clean.Stderr))
+		return fmt.Errorf("clean worktree %s: %s", dir, execx.FirstLineOr(clean.Stderr, "no output"))
 	}
 	return nil
 }
@@ -252,7 +252,7 @@ func (g *Git) RemoveWorktree(ctx context.Context, dir string) error {
 		return fmt.Errorf("remove worktree %s: %w", dir, err)
 	}
 	if res.ExitCode != 0 {
-		return fmt.Errorf("remove worktree %s: %s", dir, firstLine(res.Stderr))
+		return fmt.Errorf("remove worktree %s: %s", dir, execx.FirstLineOr(res.Stderr, "no output"))
 	}
 	return nil
 }
@@ -265,7 +265,7 @@ func (g *Git) PruneWorktrees(ctx context.Context) error {
 		return fmt.Errorf("prune worktrees: %w", err)
 	}
 	if res.ExitCode != 0 {
-		return fmt.Errorf("prune worktrees: %s", firstLine(res.Stderr))
+		return fmt.Errorf("prune worktrees: %s", execx.FirstLineOr(res.Stderr, "no output"))
 	}
 	return nil
 }
@@ -278,17 +278,7 @@ func (g *Git) IsPathDirty(ctx context.Context, path string) (bool, error) {
 		return false, fmt.Errorf("check status of %s: %w", path, err)
 	}
 	if res.ExitCode != 0 {
-		return false, fmt.Errorf("check status of %s: %s", path, firstLine(res.Stderr))
+		return false, fmt.Errorf("check status of %s: %s", path, execx.FirstLineOr(res.Stderr, "no output"))
 	}
 	return len(strings.TrimSpace(string(res.Stdout))) > 0, nil
-}
-
-// firstLine extracts the first non-empty line for terse error messages.
-func firstLine(b []byte) string {
-	for _, line := range strings.Split(string(b), "\n") {
-		if s := strings.TrimSpace(line); s != "" {
-			return s
-		}
-	}
-	return "no output"
 }

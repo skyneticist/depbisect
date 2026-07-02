@@ -7,9 +7,10 @@
 package manifest
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 )
 
 // Section is a package.json dependency section.
@@ -128,9 +129,9 @@ func (c Change) ID() string {
 // String renders the change for terminal output, preferring exact resolved
 // versions over specs when both lockfiles provided them.
 func (c Change) String() string {
-	old, new := c.OldSpec, c.NewSpec
+	oldV, newV := c.OldSpec, c.NewSpec
 	if c.OldResolved != "" && c.NewResolved != "" {
-		old, new = c.OldResolved, c.NewResolved
+		oldV, newV = c.OldResolved, c.NewResolved
 	}
 	suffix := ""
 	if c.Section != Dependencies {
@@ -139,16 +140,16 @@ func (c Change) String() string {
 	switch c.Kind {
 	case Added:
 		if c.NewResolved != "" {
-			new = c.NewResolved
+			newV = c.NewResolved
 		}
-		return fmt.Sprintf("%s %s (added)%s", c.Name, new, suffix)
+		return fmt.Sprintf("%s %s (added)%s", c.Name, newV, suffix)
 	case Removed:
 		if c.OldResolved != "" {
-			old = c.OldResolved
+			oldV = c.OldResolved
 		}
-		return fmt.Sprintf("%s %s (removed)%s", c.Name, old, suffix)
+		return fmt.Sprintf("%s %s (removed)%s", c.Name, oldV, suffix)
 	default:
-		return fmt.Sprintf("%s %s -> %s%s", c.Name, old, new, suffix)
+		return fmt.Sprintf("%s %s -> %s%s", c.Name, oldV, newV, suffix)
 	}
 }
 
@@ -182,11 +183,11 @@ func diffSections(old, new map[Section]map[string]string, order []Section) []Cha
 			}
 		}
 	}
-	sort.Slice(changes, func(i, j int) bool {
-		if changes[i].Name != changes[j].Name {
-			return changes[i].Name < changes[j].Name
+	slices.SortFunc(changes, func(a, b Change) int {
+		if c := cmp.Compare(a.Name, b.Name); c != 0 {
+			return c
 		}
-		return changes[i].Section < changes[j].Section
+		return cmp.Compare(a.Section, b.Section)
 	})
 	return changes
 }

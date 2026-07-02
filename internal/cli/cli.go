@@ -373,8 +373,6 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 	return exitCodeFor(res.Outcome)
 }
 
-// suggestBase handles an omitted --base by listing recent commits that changed
-// dependency manifests or lockfiles, so the user can pick the last one that
 // runGuidance handles the two recoverable mistakes — a missing "--" separator
 // and/or a missing --base — with one coherent message: what to fix, a list of
 // candidate base revisions when one is needed, and a copy-pasteable command. It
@@ -442,6 +440,8 @@ func suggestBaseRevisions(opts *runOptions, stderr io.Writer) (base string, ok b
 // exampleCommand renders the user's command for the example line, or a
 // placeholder when there is none or a token looks like a flag — in which case
 // we cannot safely tell where the command begins without a separator.
+// Arguments that need quoting are quoted so the suggestion stays
+// copy-pasteable.
 func exampleCommand(command []string) string {
 	if len(command) == 0 {
 		return "<command>"
@@ -451,7 +451,7 @@ func exampleCommand(command []string) string {
 			return "<command>"
 		}
 	}
-	return strings.Join(command, " ")
+	return formatCommand(command)
 }
 
 // orPlaceholder returns s, or placeholder when s is empty.

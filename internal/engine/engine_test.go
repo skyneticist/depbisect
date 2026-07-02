@@ -1584,13 +1584,13 @@ func TestValidateCheckpointFingerprintMismatch(t *testing.T) {
 		{"Context", func(f *CheckpointFingerprint) { f.Context = "run-timeout=30s" }},
 		// Command: extra element (length change)
 		{"Command extra element", func(f *CheckpointFingerprint) { f.Command = append(f.Command, "--coverage") }},
-		// Command: same length, different content — exercises equalStrings element comparison
+		// Command: same length, different content — exercises slices.Equal element comparison
 		{"Command different content", func(f *CheckpointFingerprint) { f.Command = []string{"npm", "build"} }},
 		// Changes: extra element
 		{"Changes extra element", func(f *CheckpointFingerprint) {
 			f.Changes = append(f.Changes, "dependencies:gamma")
 		}},
-		// Changes: same length, different content — exercises equalStrings element comparison
+		// Changes: same length, different content — exercises slices.Equal element comparison
 		{"Changes different content", func(f *CheckpointFingerprint) {
 			f.Changes = []string{"dependencies:alpha", "dependencies:DIFFERENT"}
 		}},
@@ -1877,35 +1877,6 @@ func TestRemoveWorktreePruneFailureSurfacesViaProgress(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("progress.details = %v; want a 'worktree prune failed' message", progress.details)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// equalStrings — covers the element-comparison branch (same length, content differs)
-// ---------------------------------------------------------------------------
-
-func TestEqualStrings(t *testing.T) {
-	cases := []struct {
-		a, b []string
-		want bool
-	}{
-		{nil, nil, true},
-		{[]string{}, []string{}, true},
-		{nil, []string{}, true}, // nil and empty have identical length (0) and no elements
-		{[]string{"x"}, []string{"x"}, true},
-		{[]string{"a", "b"}, []string{"a", "b"}, true},
-		// Length mismatch
-		{[]string{"a"}, []string{"a", "b"}, false},
-		{[]string{"a", "b"}, []string{"a"}, false},
-		// Same length, different element — this is the branch that was uncovered
-		{[]string{"a"}, []string{"b"}, false},
-		{[]string{"a", "b"}, []string{"a", "X"}, false},
-		{[]string{"a", "b"}, []string{"X", "b"}, false},
-	}
-	for _, tc := range cases {
-		if got := equalStrings(tc.a, tc.b); got != tc.want {
-			t.Errorf("equalStrings(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
-		}
 	}
 }
 
@@ -2208,24 +2179,5 @@ func TestShortSHA(t *testing.T) {
 	long := "abcdef123456789012345678901234567890"
 	if got := shortSHA(long); got != "abcdef123456" {
 		t.Errorf("long SHA: got %q, want first 12 chars", got)
-	}
-}
-
-func TestFirstLine(t *testing.T) {
-	cases := []struct {
-		input []byte
-		want  string
-	}{
-		{[]byte("error: install failed"), "error: install failed"},
-		{[]byte("line1\nline2\nline3"), "line1"}, // multi-line: only first
-		{[]byte(""), "no output"},                // empty
-		{[]byte("   \n  \n"), "no output"},       // whitespace-only
-		{[]byte("  trimmed  "), "trimmed"},       // surrounding whitespace trimmed
-		{[]byte("first\n"), "first"},             // trailing newline
-	}
-	for _, tc := range cases {
-		if got := firstLine(tc.input); got != tc.want {
-			t.Errorf("firstLine(%q) = %q, want %q", tc.input, got, tc.want)
-		}
 	}
 }
