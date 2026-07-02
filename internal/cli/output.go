@@ -257,7 +257,9 @@ func (p *progress) finalizeBaseline(role string, total int, phase string) {
 	if role == "baseline-new" {
 		verb = "applied"
 	}
-	scope := fmt.Sprintf("%d updates %s", total, verb)
+	// Pad the verb to the width of the longer one ("reverted") so the → arrow
+	// lands in the same column when the baseline and reproduced rows stack.
+	scope := fmt.Sprintf("%d updates %-8s", total, verb)
 	glyph, color, verdict := glyphOK, ansiGreen, paint(ansiGreen, "tests pass")
 	if phase != "pass" {
 		glyph, color, verdict = glyphFail, ansiRed, paint(ansiRed, "tests fail")

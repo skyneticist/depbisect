@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -532,6 +533,30 @@ func TestFinalizeBaselineUnexpected(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "unexpected") {
 		t.Errorf("finalizeBaseline with unexpected outcome should include 'unexpected', got: %q", out)
+	}
+}
+
+// TestModernBaselineArrowsAlign pins that the → in the baseline ("reverted") and
+// reproduced ("applied") verdict rows lands in the same column, so the stacked
+// rows read as an aligned pair rather than shifting by the verb-length delta.
+func TestModernBaselineArrowsAlign(t *testing.T) {
+	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
+	arrowCol := func(role, phase string) (int, string) {
+		var buf bytes.Buffer
+		p := newProgress(&buf, false, styleModern)
+		p.modernStarted = true
+		p.finalizeBaseline(role, 2, phase)
+		plain := ansi.ReplaceAllString(buf.String(), "")
+		return strings.Index(plain, glyphArrow), plain
+	}
+	oldCol, oldLine := arrowCol("baseline-old", "pass")
+	newCol, newLine := arrowCol("baseline-new", "fail")
+	if oldCol < 0 || newCol < 0 {
+		t.Fatalf("arrow not found:\n  %q\n  %q", oldLine, newLine)
+	}
+	if oldCol != newCol {
+		t.Errorf("baseline verdict arrows misaligned (→ at col %d vs %d):\n  %q\n  %q",
+			oldCol, newCol, oldLine, newLine)
 	}
 }
 
