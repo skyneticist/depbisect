@@ -96,6 +96,9 @@ type progress struct {
 	style       outputStyle
 	// frame is the live-animation frame period; tests shorten it.
 	frame time.Duration
+	// lineWidth reports the terminal width for live-row sizing; tests
+	// override it to exercise narrow terminals (nil means terminalLineWidth).
+	lineWidth func(io.Writer) int
 
 	// mu guards every field below and all writes to w. The exported-style
 	// entry points (Step, Detail, Trial, clearActiveTrial) acquire it; the
@@ -122,6 +125,7 @@ func newProgress(w io.Writer, verbose bool, style outputStyle) *progress {
 		color:       color,
 		style:       style,
 		frame:       barFrameInterval,
+		lineWidth:   terminalLineWidth,
 	}
 }
 
@@ -376,14 +380,30 @@ func (p *progress) finalizeBaseline(role string, total int, phase string) {
 
 // refreshDdmin repaints the live ddmin row and ensures the animation ticker
 // is running; the ticker advances barTick and calls back in for each frame.
-// Caller holds p.mu.
+// The row must never exceed the terminal width: a wrapped live line cannot be
+// erased by \r + erase-line (only the last wrapped row would clear), and at
+// ~10 fps the leaked rows would flood the screen. Trailing fields are dropped
+// on narrow terminals instead. Caller holds p.mu.
 func (p *progress) refreshDdmin() {
 	p.clearLine()
-	elapsed := formatDuration(time.Since(p.ddminStart))
-	status := fmt.Sprintf("%s %d tested · %s",
-		paint(ansiCyan, "isolating…"), p.ddminTested, paint(ansiGray, elapsed))
+	// Visible widths: glyph+label prefix ≈ 14; "isolating…" 10; " N tested"
+	// ≤ ~11; " · <elapsed>" ≤ ~12; bar+space 13. Thresholds are those sums
+	// with a little slack.
+	widthFn := p.lineWidth
+	if widthFn == nil {
+		widthFn = terminalLineWidth
+	}
+	width := widthFn(p.w)
+	status := paint(ansiCyan, "isolating…")
+	switch {
+	case width >= 50:
+		status = fmt.Sprintf("%s %d tested · %s",
+			paint(ansiCyan, "isolating…"), p.ddminTested, paint(ansiGray, formatDuration(time.Since(p.ddminStart))))
+	case width >= 38:
+		status = fmt.Sprintf("%s %d tested", paint(ansiCyan, "isolating…"), p.ddminTested)
+	}
 	bar := ""
-	if terminalLineWidth(p.w) >= 60 {
+	if width >= 60 {
 		bar = p.indeterminateBar(12) + " "
 	}
 	fmt.Fprintf(p.w, "%s %-*s %s%s",
