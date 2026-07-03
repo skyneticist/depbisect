@@ -2,7 +2,7 @@
 
 ## Not supported (DepBisect refuses with a clear error)
 
-- **Workspaces.** npm/yarn `workspaces` in `package.json`, `pnpm-workspace.yaml` repositories, Cargo `[workspace]` manifests (including virtual manifests), and uv `[tool.uv.workspace]` workspaces.
+- **Workspaces.** npm/yarn `workspaces` in `package.json`, `pnpm-workspace.yaml` repositories, Cargo `[workspace]` manifests (including virtual manifests), Go `go.work` workspaces, and uv `[tool.uv.workspace]` workspaces.
 - **Yarn.** For JavaScript, only npm and pnpm lockfiles are recognized.
 - **Missing JavaScript lockfile.** For npm/pnpm a `package-lock.json` or `pnpm-lock.yaml` must exist at `--to` (or pass `--pm` explicitly). Cargo needs no lockfile — `Cargo.lock` is optional and only enriches diagnostics.
 - **Ambiguous detection.** If multiple manifests exist (for example a `package.json` and a `Cargo.toml`), or both JavaScript lockfiles exist, choose with `--pm npm|pnpm|cargo|go|uv`.
