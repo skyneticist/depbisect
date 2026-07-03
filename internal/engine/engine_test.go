@@ -2040,13 +2040,14 @@ func TestRunWorktreePoolPartialSetupCleansUp(t *testing.T) {
 
 // appendErrorStore is a CheckpointStore whose Append always returns an error.
 type appendErrorStore struct {
-	starts int
-	err    error
+	starts  int
+	appends int
+	err     error
 }
 
 func (s *appendErrorStore) Load() (*Checkpoint, error) { return nil, os.ErrNotExist }
 func (s *appendErrorStore) Start(Checkpoint) error     { s.starts++; return nil }
-func (s *appendErrorStore) Append(Trial) error         { return s.err }
+func (s *appendErrorStore) Append(Trial) error         { s.appends++; return s.err }
 func (s *appendErrorStore) Clear() error               { return nil }
 
 // clearFailStore wraps fakeCheckpointStore and returns an error from Clear.
@@ -2056,17 +2057,32 @@ type clearFailStore struct {
 
 func (s *clearFailStore) Clear() error { return errors.New("fsync failed") }
 
-func TestRunCheckpointAppendFailureIsFatal(t *testing.T) {
-	env := newEnv(t, threeChangeRepo(), func(map[string]string) bool { return false }, 1)
+// TestRunCheckpointAppendFailureDegrades pins the graceful-degradation
+// contract: a failed checkpoint write must not abort the bisection. The run
+// completes with its normal result, checkpointing is disabled after the
+// first failure (no further Append attempts), and the loss is surfaced as a
+// diagnostic. This is correctness-safe: a checkpoint merely missing trials
+// still resumes (matching fingerprint; unpersisted trials just run again).
+func TestRunCheckpointAppendFailureDegrades(t *testing.T) {
+	env := newEnv(t, threeChangeRepo(), func(deps map[string]string) bool {
+		return deps["beta"] == "3.2.0"
+	}, 1)
 	store := &appendErrorStore{err: errors.New("disk full")}
 	opts := baseOpts()
 	opts.Checkpoint = store
-	_, err := env.eng.Run(context.Background(), opts)
-	if err == nil {
-		t.Fatal("checkpoint append failure must propagate as a fatal error")
+	res, err := env.eng.Run(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("checkpoint append failure must not abort the run: %v", err)
 	}
-	if !strings.Contains(err.Error(), "disk full") {
-		t.Errorf("err = %v, want 'disk full' wrapped in error chain", err)
+	if res.Outcome != OutcomeMinimalFound {
+		t.Fatalf("outcome = %q, want MinimalFound", res.Outcome)
+	}
+	if store.appends != 1 {
+		t.Errorf("Append called %d times, want 1 (checkpointing disabled after the first failure)", store.appends)
+	}
+	joined := strings.Join(res.Diagnostics, "\n")
+	if !strings.Contains(joined, "checkpointing disabled") || !strings.Contains(joined, "disk full") {
+		t.Errorf("diagnostics missing degradation notice: %q", joined)
 	}
 }
 

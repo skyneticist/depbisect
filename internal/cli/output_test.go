@@ -2,10 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/skyneticist/depbisect/internal/engine"
 	"github.com/skyneticist/depbisect/internal/manifest"
@@ -924,5 +926,52 @@ func TestDdminTickerAnimatesAndStops(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "ddmin") {
 		t.Errorf("expected final ddmin row, got: %q", buf.String())
+	}
+}
+
+// TestRefreshDdminNarrowTerminals pins the width guard: the live ddmin row
+// must never exceed the terminal width, because a wrapped live line cannot be
+// erased in place — at ~10 fps the leaked rows would flood a narrow terminal.
+// Trailing fields drop instead: elapsed first, then the tested count, and the
+// bar only ever renders at >= 60 columns.
+func TestRefreshDdminNarrowTerminals(t *testing.T) {
+	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
+	render := func(width int) string {
+		var buf bytes.Buffer
+		p := newProgress(&buf, false, styleModern)
+		p.lineWidth = func(io.Writer) int { return width }
+		p.ddminStart = time.Now()
+		p.ddminTested = 123
+		p.refreshDdmin() // interactive=false: no ticker, plain append
+		return ansi.ReplaceAllString(buf.String(), "")
+	}
+
+	cases := []struct {
+		width       int
+		wantTested  bool
+		wantElapsed bool
+		wantBar     bool
+	}{
+		{100, true, true, true},
+		{59, true, true, false},
+		{50, true, true, false},
+		{49, true, false, false},
+		{38, true, false, false},
+		{37, false, false, false},
+	}
+	for _, tc := range cases {
+		row := render(tc.width)
+		if n := utf8.RuneCountInString(row); n > tc.width {
+			t.Errorf("width %d: row is %d runes (would wrap): %q", tc.width, n, row)
+		}
+		if got := strings.Contains(row, "tested"); got != tc.wantTested {
+			t.Errorf("width %d: tested count present = %v, want %v: %q", tc.width, got, tc.wantTested, row)
+		}
+		if got := strings.Contains(row, "·"); got != tc.wantElapsed {
+			t.Errorf("width %d: elapsed present = %v, want %v: %q", tc.width, got, tc.wantElapsed, row)
+		}
+		if got := strings.Contains(row, "░"); got != tc.wantBar {
+			t.Errorf("width %d: bar present = %v, want %v: %q", tc.width, got, tc.wantBar, row)
+		}
 	}
 }
