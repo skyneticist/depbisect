@@ -8,6 +8,55 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- The live `ddmin` progress row now animates a smooth scanner sweep (a bright
+  head with a fading tail) at ~10 fps, and its tested count and elapsed time
+  update continuously between trial events instead of freezing during long
+  installs. Interactive color terminals only; redirected/CI output is
+  unchanged.
+- `DEPBISECT_JOBS` environment variable sets the default for `--jobs`
+  (the flag still wins). The built-in default stays `1`: parallel trials
+  require a verification command that is safe to run concurrently.
+- The GitHub Action gained a `jobs` input, mirroring `--jobs`.
+
+### Changed
+
+- Verbose trial detail now says when verification stopped early at the first
+  passing run (e.g. `failed 0/1 runs (stopped at first pass; 3 planned)`), so
+  a shortened run count is not mistaken for a full flakiness sample.
+- The live ddmin row sizes itself to the terminal, dropping trailing fields
+  on narrow terminals instead of wrapping.
+
+### Fixed
+
+- A failed checkpoint write (disk full, file removed mid-run) no longer
+  aborts the bisection: checkpointing is disabled with a diagnostic and the
+  run completes normally. A checkpoint missing trials still resumes safely.
+- npm package metadata: the README mascot image now uses an absolute URL
+  (npmjs.com cannot resolve repo-relative paths) and the package description
+  reflects all supported ecosystems, not just npm.
+
+## [0.1.3] - 2026-07-01
+
+### Added
+
+- Guided `--base` recovery: omitting `--base` (or the `--` separator) now
+  lists recent dependency-changing commits to pick from and prints a
+  copy-pasteable corrected command; common git failures (not a repository, no
+  commits, unknown revision) get actionable hints.
+- Windows end-to-end smoke coverage in CI; all manifest/lockfile parsers are
+  fuzzed in CI.
+
+### Changed
+
+- npm publishing switched to Trusted Publishing (OIDC) with provenance — no
+  registry token in CI.
+- README overhaul (mascot, tightened hook and comparisons) and re-rendered
+  demo GIFs.
+
+## [0.1.2] - 2026-06-25
+
+### Added
+
 - Rust / Cargo support: bisect direct `Cargo.toml` dependency changes, with
   `cargo fetch` candidate installs and resolved-version annotations from
   `Cargo.lock`. Auto-detected from `Cargo.toml`, or select with `--pm cargo`.
@@ -30,6 +79,7 @@ All notable changes to this project are documented here. The format follows
   verification command must be safe to run concurrently. Each ddmin
   granularity level is now evaluated as a batch, so a pool of worktrees can
   test candidates concurrently while preserving 1-minimality.
+- Homebrew and Scoop packages, published from releases by goreleaser.
 
 ### Changed
 
@@ -38,6 +88,7 @@ All notable changes to this project are documented here. The format follows
   alongside the original `classic` layout. Select with `--style` or the
   `DEPBISECT_STYLE` environment variable; redirected/CI output stays plain
   either way.
+- The minimum supported Go version for `go install` builds is 1.25.
 
 ## [0.1.1] - 2026-06-13
 
