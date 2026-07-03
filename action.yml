@@ -26,6 +26,13 @@ inputs:
     description: Verification runs per candidate (flaky-test protection).
     required: false
     default: "1"
+  jobs:
+    description: >-
+      Candidate trials to evaluate in parallel, each in its own worktree. The
+      minimal set is identical at any value, but the verification command must
+      be safe to run concurrently (no shared ports/files/state).
+    required: false
+    default: "1"
   pm:
     description: Package manager override (npm, pnpm, cargo, go, or uv). Default autodetect.
     required: false
@@ -97,6 +104,7 @@ runs:
         DB_BASE: ${{ inputs.base }}
         DB_TO: ${{ inputs.to }}
         DB_RUNS: ${{ inputs.runs }}
+        DB_JOBS: ${{ inputs.jobs }}
         DB_PM: ${{ inputs.pm }}
         DB_RUN_TIMEOUT: ${{ inputs.run-timeout }}
         DB_INSTALL_TIMEOUT: ${{ inputs.install-timeout }}
@@ -111,6 +119,7 @@ runs:
           --base "$DB_BASE"
           --to "$DB_TO"
           --runs "$DB_RUNS"
+          --jobs "$DB_JOBS"
           --run-timeout "$DB_RUN_TIMEOUT"
           --install-timeout "$DB_INSTALL_TIMEOUT"
           --overall-timeout "$DB_OVERALL_TIMEOUT"
