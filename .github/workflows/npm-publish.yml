@@ -61,11 +61,15 @@ jobs:
         run: node scripts/build-npm.mjs "${{ steps.ver.outputs.version }}"
 
       - name: Publish platform packages, then the launcher
+        # The ./ prefix forces npm to treat each argument as a directory; a
+        # bare "npm/depbisect" parses as the GitHub shorthand
+        # github.com/npm/depbisect. Provenance requires the repository to be
+        # PUBLIC — on a private repo the registry rejects the bundle (E422).
         run: |
           set -euo pipefail
-          for dir in npm/@depbisect/*/; do
+          for dir in ./npm/@depbisect/*/; do
             echo "publishing $dir"
             npm publish "$dir" --provenance --access public
           done
-          echo "publishing npm/depbisect"
-          npm publish npm/depbisect --provenance --access public
+          echo "publishing ./npm/depbisect"
+          npm publish ./npm/depbisect --provenance --access public
