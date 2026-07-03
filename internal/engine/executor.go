@@ -135,7 +135,7 @@ func (ex *executor) eval(ctx context.Context, subset []manifest.Change, role str
 		ex.progress.Trial(num, role, len(subset), ex.totalChanges, trial.Outcome, trial.Duration)
 		ex.progress.Detail("Install failed for %d applied changes (%s); candidate skipped",
 			len(subset), execx.FirstLineOr(instRes.Stderr, "no output"))
-		return ex.record(key, trial)
+		return ex.record(key, trial), nil
 	}
 	ex.progress.Trial(num, role, len(subset), ex.totalChanges, "verifying", afterInstall.Sub(start))
 	verdict, err := ex.verifier.Verify(ctx, dir, stopOnPass)
@@ -158,7 +158,7 @@ func (ex *executor) eval(ctx context.Context, subset []manifest.Change, role str
 	trial.timedOut = verdict.AllRunsTimedOut()
 	ex.progress.Trial(num, role, len(subset), ex.totalChanges, trial.Outcome, trial.Duration)
 	ex.progress.Detail("Tested %d applied changes: %s (%s)", len(subset), trial.Outcome, verdict.String())
-	return ex.record(key, trial)
+	return ex.record(key, trial), nil
 }
 
 // record persists a completed trial into the memo, the result, and the
@@ -166,20 +166,28 @@ func (ex *executor) eval(ctx context.Context, subset []manifest.Change, role str
 // it returns the existing trial and discards this one; in practice the caller
 // structure guarantees no two in-flight evaluations share a key, so this is a
 // safety net rather than an expected path.
-func (ex *executor) record(key string, trial Trial) (Trial, error) {
+//
+// A failed checkpoint write does not abort the bisection — the result is
+// still computable in memory, and a checkpoint that is merely missing trials
+// resumes safely (the fingerprint still matches; unpersisted trials just run
+// again). Checkpointing is disabled for the rest of the run and the loss is
+// surfaced as a diagnostic.
+func (ex *executor) record(key string, trial Trial) Trial {
 	ex.mu.Lock()
 	defer ex.mu.Unlock()
 	if existing, ok := ex.memo[key]; ok {
-		return existing, nil
+		return existing
 	}
 	ex.memo[key] = trial
 	ex.res.Trials = append(ex.res.Trials, trial)
 	if ex.storeOn {
 		if err := ex.store.Append(trial); err != nil {
-			return Trial{}, fmt.Errorf("save checkpoint trial: %w", err)
+			ex.storeOn = false
+			ex.res.Diagnostics = append(ex.res.Diagnostics, fmt.Sprintf(
+				"checkpointing disabled after a failed write (%v); later trials are not being saved, so a --resume may need to re-run them", err))
 		}
 	}
-	return trial, nil
+	return trial
 }
 
 // lookup returns the memoized trial for a subset, or the zero Trial if it has
