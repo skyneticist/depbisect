@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../ /main/docs/assets/images/axol_detective.png" alt="DepBisect mascot — a cartoon axolotl detective in a deerstalker hat holding scissors" width="180">
+  <img src="https://raw.githubusercontent.com/skyneticist/depbisect/main/docs/assets/images/axol_detective.png" alt="DepBisect mascot — a cartoon axolotl detective in a deerstalker hat holding scissors" width="180">
 </p>
 
 <h1 align="center">DepBisect</h1>

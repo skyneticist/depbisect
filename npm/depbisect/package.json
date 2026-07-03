@@ -1,7 +1,7 @@
 {
   "name": "depbisect",
   "version": "0.1.4",
-  "description": "git bisect, but for dependency updates — find the minimal set of package.json changes between two commits that breaks your build, and prove it's minimal.",
+  "description": "git bisect, but for dependency updates — find the minimal set of dependency changes (npm, pnpm, Cargo, Go, uv) between two commits that breaks your build, and prove it's minimal.",
   "keywords": [
     "bisect",
     "git-bisect",
@@ -10,6 +10,12 @@
     "npm",
     "pnpm",
     "package-json",
+    "cargo",
+    "rust",
+    "go",
+    "golang",
+    "python",
+    "uv",
     "delta-debugging",
     "ddmin",
     "ci",
