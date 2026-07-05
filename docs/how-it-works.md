@@ -31,10 +31,45 @@ the complete bisection. The first two are independent per-operation budgets;
 the overall deadline can interrupt any phase. Worktree cleanup uses a separate
 two-minute context so it is still attempted after cancellation or timeout.
 
+## Parallel trials (`--jobs`)
+
+`--jobs N` maintains N isolated worktrees ("lanes") and evaluates each ddmin batch of
+candidates across them concurrently. Batch selection always adopts the lowest-indexed
+failing candidate, so the minimal set is identical at any job count — parallelism changes
+wall-clock time only.
+
+The speedup has two ceilings:
+
+- **Batch width.** ddmin is adaptive: each round's outcomes decide the next round's
+  candidates, so only the candidates *within* one batch run concurrently, and every lane
+  waits at the batch boundary. Early rounds test just two halves, no batch is ever wider
+  than the number of changes still under suspicion, and the closing minimality check is
+  one probe per member of the (usually tiny) minimal set. Lanes beyond the current batch
+  width sit idle.
+- **Machine capacity.** Every lane runs a full dependency install plus the verification
+  command, both of which are typically multi-core and I/O-hungry themselves. Once lanes
+  saturate the CPU, disk, or registry connection, additional lanes only contend.
+
+There is also a work-versus-time trade: a sequential run stops a batch at its first
+failure, while a parallel run evaluates the whole batch. Wall-clock time still drops, but
+total compute rises with the job count.
+
+In practice returns diminish past roughly 4–8 jobs for typical dependency batches
+(5–30 changes); a reasonable ceiling is `min(number of changes, cores available to spare)`.
+The README's 28-change demo illustrates the curve: 12 lanes buy about a 2.8× speedup, not
+12×. The default stays `1` because parallel lanes require a verification command that is
+safe to run concurrently (no shared ports, files, or databases).
+
 ## Determinism
 
 The ddmin core is pure and deterministic; identical test outcomes produce identical bisection paths. Subset outcomes are memoized, so no configuration is installed or verified twice. Completed trials are also appended to a checkpoint. `--resume` validates the revisions, dependency set, package manager and its reported version, command, run count, and all timeout settings before restoring that memoized state.
 
 ## Why lockfile-only changes cannot be bisected
+
+DepBisect bisects the resolver's *inputs* — manifest specs, independent variables that can
+be freely recombined — and never its *outputs*: the lockfile is a single coherent solution
+to the whole constraint graph, so an arbitrary subset of its entries is usually not a valid
+state at all (entries are coupled through their dependents' constraints — a hybrid lockfile
+is a graph no resolver would produce).
 
 DepBisect materializes candidates by editing version specs in the manifest. If a spec like `^1.2.0` is unchanged but the lockfile resolution moved from `1.2.3` to `1.9.0`, there is no manifest edit that pins the old resolution without also changing the spec — and synthesizing per-candidate lockfiles is package-manager-version-specific and fragile. DepBisect reports these changes explicitly so you can investigate them manually (e.g. by inspecting the lockfile diff or pinning an override).

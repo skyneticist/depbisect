@@ -247,6 +247,13 @@ reaching the identical twelve-package result in roughly a third of the wall time
 
 ![The same 28-change bisection with --jobs 12 — twelve worktrees evaluating candidates concurrently — reaching the identical twelve-package result in 5.5 seconds](docs/assets/gifs/js/parallel-only.gif)
 
+**Picking a job count.** Returns diminish past roughly 4–8 jobs: ddmin evaluates one batch
+of candidates at a time (early rounds probe just two halves, and no batch is wider than the
+number of suspect changes), and every lane runs a full install + test that competes for the
+same CPU, disk, and network. The demo above needed 12 lanes for a 2.8× speedup. Any value
+yields the same minimal set — see
+[how it works](docs/how-it-works.md#parallel-trials---jobs) for the mechanics.
+
 <details>
 <summary><b>Timeouts, checkpoints, reports, and environment</b></summary>
 
@@ -263,7 +270,8 @@ continue. Use `--checkpoint <path>` to relocate it, or `--checkpoint ""` to disa
 **Reports.** `--report-md` / `--report-json` set output paths; `--no-reports` writes none.
 
 **Output.** Two styles, set with `--style` or `DEPBISECT_STYLE`: `modern` (default) shows
-glyph lifecycle rows (`baseline` / `reproduced` / `ddmin`) and a dressed result summary;
+glyph lifecycle rows (`baseline` / `reproduced` / `ddmin`) and a dressed result summary —
+its live activity sweep animates faster at higher `--jobs`, echoing trial throughput;
 `classic` keeps the original label-column layout. Output adapts to its destination —
 terminals get a width-aware, in-place active line; redirected output (CI logs, pipes) stays
 plain and line-oriented, so machine-readable output is identical either way. `NO_COLOR` and

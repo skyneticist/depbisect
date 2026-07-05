@@ -416,7 +416,7 @@ func TestPrintSummaryModernFallsBackWithoutColor(t *testing.T) {
 
 func TestProgressStepClassic(t *testing.T) {
 	var buf bytes.Buffer
-	p := newProgress(&buf, false, styleClassic)
+	p := newProgress(&buf, false, styleClassic, 1)
 	p.Step("Prepare", "cloning worktrees")
 	out := buf.String()
 	if !strings.Contains(out, "Prepare") || !strings.Contains(out, "cloning worktrees") {
@@ -426,7 +426,7 @@ func TestProgressStepClassic(t *testing.T) {
 
 func TestProgressDetailSuppressedWhenNotVerbose(t *testing.T) {
 	var buf bytes.Buffer
-	p := newProgress(&buf, false, styleClassic)
+	p := newProgress(&buf, false, styleClassic, 1)
 	p.Detail("this should not appear")
 	if buf.Len() != 0 {
 		t.Errorf("Detail wrote output in non-verbose mode: %q", buf.String())
@@ -435,7 +435,7 @@ func TestProgressDetailSuppressedWhenNotVerbose(t *testing.T) {
 
 func TestProgressDetailAppearsWhenVerbose(t *testing.T) {
 	var buf bytes.Buffer
-	p := newProgress(&buf, true, styleClassic)
+	p := newProgress(&buf, true, styleClassic, 1)
 	p.Detail("extra debug %s", "info")
 	out := buf.String()
 	if !strings.Contains(out, "extra debug info") {
@@ -527,7 +527,7 @@ func TestWrapWordsSingleWordExceedsWidth(t *testing.T) {
 
 func TestFinalizeBaselineUnexpected(t *testing.T) {
 	var buf bytes.Buffer
-	p := newProgress(&buf, false, styleClassic)
+	p := newProgress(&buf, false, styleClassic, 1)
 	p.modernStarted = true // skip the blank-line preamble
 
 	// baseline-old expects "pass"; giving it "fail" is unexpected
@@ -545,7 +545,7 @@ func TestModernBaselineArrowsAlign(t *testing.T) {
 	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
 	arrowCol := func(role, phase string) (int, string) {
 		var buf bytes.Buffer
-		p := newProgress(&buf, false, styleModern)
+		p := newProgress(&buf, false, styleModern, 1)
 		p.modernStarted = true
 		p.finalizeBaseline(role, 2, phase)
 		plain := ansi.ReplaceAllString(buf.String(), "")
@@ -567,7 +567,7 @@ func TestModernBaselineArrowsAlign(t *testing.T) {
 func TestStepArrowStyle(t *testing.T) {
 	render := func(style outputStyle) string {
 		var buf bytes.Buffer
-		newProgress(&buf, false, style).Step("Compare", "%s -> %s", "HEAD~1", "HEAD")
+		newProgress(&buf, false, style, 1).Step("Compare", "%s -> %s", "HEAD~1", "HEAD")
 		return buf.String()
 	}
 	modern := render(styleModern)
@@ -600,7 +600,7 @@ func TestChangeVersionStrRebuilt(t *testing.T) {
 
 func TestModernStepResume(t *testing.T) {
 	var buf bytes.Buffer
-	p := newProgress(&buf, false, styleModern)
+	p := newProgress(&buf, false, styleModern, 1)
 	p.modernStarted = true // skip blank-line preamble so output is deterministic
 	// Call modernStep directly (it's unexported but we are in package cli)
 	p.modernStep("Resume", "resuming from checkpoint at trial 5")
@@ -612,7 +612,7 @@ func TestModernStepResume(t *testing.T) {
 
 func TestModernStepComplete(t *testing.T) {
 	var buf bytes.Buffer
-	p := newProgress(&buf, false, styleModern)
+	p := newProgress(&buf, false, styleModern, 1)
 	p.modernStarted = true
 	p.modernStep("Complete", "minimal set found")
 	out := buf.String()
@@ -623,7 +623,7 @@ func TestModernStepComplete(t *testing.T) {
 
 func TestModernStepCompleteNotProven(t *testing.T) {
 	var buf bytes.Buffer
-	p := newProgress(&buf, false, styleModern)
+	p := newProgress(&buf, false, styleModern, 1)
 	p.modernStarted = true
 	p.modernStep("Complete", "not proven minimal")
 	out := buf.String()
@@ -832,6 +832,84 @@ func TestPrintModernSummaryFactsManagerTrialsDiagnostics(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// writeChangeSection — classic list alignment
+// ---------------------------------------------------------------------------
+
+// TestWriteChangeSectionAlignsVersions pins the classic list layout: names pad
+// to one column so every version string starts at the same offset, matching
+// the modern renderer's alignment.
+func TestWriteChangeSectionAlignsVersions(t *testing.T) {
+	var buf bytes.Buffer
+	changes := []manifest.Change{
+		makeChange("lodash", "^4.17.20", "^4.17.21"),
+		makeChange("github.com/org/some-longer-name", "v1.2.3", "v1.3.0"),
+	}
+	writeChangeSection(&buf, "Breaking dependencies", changes, false)
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 4 { // blank, title, two entries
+		t.Fatalf("unexpected layout:\n%s", buf.String())
+	}
+	shortCol := strings.Index(lines[2], "^4.17.20")
+	longCol := strings.Index(lines[3], "v1.2.3")
+	if shortCol < 0 || longCol < 0 || shortCol != longCol {
+		t.Errorf("version columns misaligned (%d vs %d):\n%s", shortCol, longCol, buf.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// classic Trial — numeric columns pad so consecutive rows align
+// ---------------------------------------------------------------------------
+
+func TestClassicTrialRowsAlign(t *testing.T) {
+	var buf bytes.Buffer
+	p := newProgress(&buf, false, styleClassic, 1)
+	p.Trial(3, "candidate", 6, 12, "fail", 3800*time.Millisecond)
+	p.Trial(10, "candidate", 1, 12, "fail", 3700*time.Millisecond)
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected two rows, got:\n%s", buf.String())
+	}
+	for _, want := range []string{"trial  3", " 6/12 changes"} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("row missing %q: %q", want, lines[0])
+		}
+	}
+	col := func(line, sub string) int { return strings.Index(line, sub) }
+	if col(lines[0], "/12 changes") != col(lines[1], "/12 changes") {
+		t.Errorf("counter columns misaligned:\n%q\n%q", lines[0], lines[1])
+	}
+	if col(lines[0], "| candidate") != col(lines[1], "| candidate") {
+		t.Errorf("role columns misaligned:\n%q\n%q", lines[0], lines[1])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// cylonFrameInterval — jobs-scaled animation pacing
+// ---------------------------------------------------------------------------
+
+func TestCylonFrameInterval(t *testing.T) {
+	cases := []struct {
+		jobs int
+		want time.Duration
+	}{
+		{-1, cylonFrameBase}, // defensive: nonsense clamps to the base rate
+		{0, cylonFrameBase},
+		{1, cylonFrameBase},
+		{2, 65 * time.Millisecond},
+		{3, 65 * time.Millisecond},
+		{4, 50 * time.Millisecond},
+		{7, 50 * time.Millisecond},
+		{8, cylonFrameFloor},
+		{64, cylonFrameFloor}, // never below the floor
+	}
+	for _, tc := range cases {
+		if got := cylonFrameInterval(tc.jobs); got != tc.want {
+			t.Errorf("cylonFrameInterval(%d) = %s, want %s", tc.jobs, got, tc.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Cylon eye — sweep geometry, fade rendering, and the animation ticker
 // ---------------------------------------------------------------------------
 
@@ -858,7 +936,7 @@ func TestEyePosBounces(t *testing.T) {
 func TestIndeterminateBarCylon(t *testing.T) {
 	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
 	var buf bytes.Buffer
-	p := newProgress(&buf, false, styleModern)
+	p := newProgress(&buf, false, styleModern, 1)
 
 	p.barTick = 5 // mid-sweep, moving right: head 5, tail at 4 and 3
 	runes := []rune(ansi.ReplaceAllString(p.indeterminateBar(12), ""))
@@ -889,7 +967,7 @@ func TestIndeterminateBarCylon(t *testing.T) {
 // ticker so nothing can draw over subsequent output.
 func TestDdminTickerAnimatesAndStops(t *testing.T) {
 	var buf bytes.Buffer
-	p := newProgress(&buf, false, styleModern)
+	p := newProgress(&buf, false, styleModern, 1)
 	p.interactive = true // buffer-backed: pretend to be a TTY
 	p.color = true
 	p.frame = 2 * time.Millisecond
@@ -938,7 +1016,7 @@ func TestRefreshDdminNarrowTerminals(t *testing.T) {
 	ansi := regexp.MustCompile("\x1b\\[[0-9;]*m")
 	render := func(width int) string {
 		var buf bytes.Buffer
-		p := newProgress(&buf, false, styleModern)
+		p := newProgress(&buf, false, styleModern, 1)
 		p.lineWidth = func(io.Writer) int { return width }
 		p.ddminStart = time.Now()
 		p.ddminTested = 123

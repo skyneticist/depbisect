@@ -326,7 +326,7 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 	if opts.quiet {
 		progressWriter = io.Discard
 	}
-	progressOutput := newProgress(progressWriter, opts.verbose, opts.style)
+	progressOutput := newProgress(progressWriter, opts.verbose, opts.style, opts.jobs)
 	eng := &engine.Engine{
 		Git: git,
 		NewInstaller: func(m pm.Manager) engine.Installer {

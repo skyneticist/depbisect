@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"math/bits"
 	"os"
 	"strconv"
 	"strings"
@@ -44,9 +45,31 @@ const (
 	ansiGray    = "\x1b[90m"
 )
 
-// barFrameInterval is the frame period of the live ddmin animation (~10 fps).
-// Frames redraw one short stderr line on an interactive terminal only.
-const barFrameInterval = 100 * time.Millisecond
+// Cylon animation pacing. The live ddmin row redraws every
+// cylonFrameInterval(jobs); frames repaint one short stderr line on an
+// interactive terminal only. More lanes complete probes faster, so the eye
+// sweeps faster too — a visual echo of trial throughput. The speedup is one
+// step per doubling of lanes (sub-linear, so high job counts don't flicker)
+// and clamps at a floor that keeps the motion legible and the redraw cheap.
+const (
+	cylonFrameBase  = 80 * time.Millisecond // frame period at --jobs 1
+	cylonFrameStep  = 15 * time.Millisecond // shaved off per doubling of lanes
+	cylonFrameFloor = 40 * time.Millisecond
+)
+
+// cylonFrameInterval maps a job count to the animation frame period:
+// 80ms at 1 lane, 65ms at 2–3, 50ms at 4–7, and the 40ms floor from 8 up.
+func cylonFrameInterval(jobs int) time.Duration {
+	if jobs < 1 {
+		jobs = 1
+	}
+	doublings := bits.Len(uint(jobs)) - 1
+	interval := cylonFrameBase - time.Duration(doublings)*cylonFrameStep
+	if interval < cylonFrameFloor {
+		return cylonFrameFloor
+	}
+	return interval
+}
 
 // Glyphs used by the modern style. They render only when color is active,
 // which in practice means a real terminal; classic output stays glyph-free.
@@ -94,7 +117,8 @@ type progress struct {
 	interactive bool
 	color       bool
 	style       outputStyle
-	// frame is the live-animation frame period; tests shorten it.
+	// frame is the live-animation frame period, derived from the job count
+	// (see cylonFrameInterval); tests shorten it.
 	frame time.Duration
 	// lineWidth reports the terminal width for live-row sizing; tests
 	// override it to exercise narrow terminals (nil means terminalLineWidth).
@@ -116,7 +140,7 @@ type progress struct {
 	tickerStop chan struct{}
 }
 
-func newProgress(w io.Writer, verbose bool, style outputStyle) *progress {
+func newProgress(w io.Writer, verbose bool, style outputStyle, jobs int) *progress {
 	interactive, color := terminalMode(w)
 	return &progress{
 		w:           w,
@@ -124,7 +148,7 @@ func newProgress(w io.Writer, verbose bool, style outputStyle) *progress {
 		interactive: interactive,
 		color:       color,
 		style:       style,
-		frame:       barFrameInterval,
+		frame:       cylonFrameInterval(jobs),
 		lineWidth:   terminalLineWidth,
 	}
 }
@@ -173,8 +197,11 @@ func (p *progress) Trial(number int, role string, applied, total int, phase stri
 		p.modernTrial(role, total, phase)
 		return
 	}
+	// Numeric columns are padded so consecutive rows align: applied to the
+	// digit width of total, the trial number to two digits (runs rarely
+	// exceed 99 trials; wider numbers grow the column without truncation).
 	roleLabel := trialRoleLabel(role)
-	scope := fmt.Sprintf("%s | %d/%d changes", roleLabel, applied, total)
+	scope := fmt.Sprintf("%s | %*d/%d changes", roleLabel, len(strconv.Itoa(total)), applied, total)
 
 	if phase == "preparing" || phase == "installing" || phase == "verifying" {
 		message := scope + " | " + phase
@@ -208,7 +235,7 @@ func (p *progress) Trial(number int, role string, applied, total int, phase stri
 		scope += " | " + strings.ToUpper(phase)
 	}
 	writeStatus(p.w, status,
-		fmt.Sprintf("trial %d | %s | %s", number, scope, formatDuration(elapsed)),
+		fmt.Sprintf("trial %2d | %s | %s", number, scope, formatDuration(elapsed)),
 		p.color, statusColor, true)
 }
 
@@ -253,7 +280,7 @@ func (p *progress) startTicker() {
 	if interval <= 0 {
 		// A zero-value progress (constructed without newProgress) still
 		// animates at the standard rate rather than panicking NewTicker.
-		interval = barFrameInterval
+		interval = cylonFrameInterval(1)
 	}
 	go func() {
 		t := time.NewTicker(interval)
@@ -382,8 +409,8 @@ func (p *progress) finalizeBaseline(role string, total int, phase string) {
 // is running; the ticker advances barTick and calls back in for each frame.
 // The row must never exceed the terminal width: a wrapped live line cannot be
 // erased by \r + erase-line (only the last wrapped row would clear), and at
-// ~10 fps the leaked rows would flood the screen. Trailing fields are dropped
-// on narrow terminals instead. Caller holds p.mu.
+// 12–25 fps the leaked rows would flood the screen. Trailing fields are
+// dropped on narrow terminals instead. Caller holds p.mu.
 func (p *progress) refreshDdmin() {
 	p.clearLine()
 	// Visible widths: glyph+label prefix ≈ 14; "isolating…" 10; " N tested"
@@ -646,13 +673,7 @@ func writeModernChanges(w io.Writer, title string, changes []manifest.Change) {
 	}
 	fmt.Fprintf(w, "\n%*s%s\n", modernGutter, "", paint(ansiGray, title))
 
-	maxLen := 0
-	for _, c := range changes {
-		if n := utf8.RuneCountInString(c.Name); n > maxLen {
-			maxLen = n
-		}
-	}
-
+	maxLen := maxChangeNameWidth(changes)
 	for _, change := range changes {
 		prefix, leaf := splitPackageName(change.Name)
 		pad := strings.Repeat(" ", maxLen-utf8.RuneCountInString(change.Name)+2)
@@ -733,9 +754,22 @@ func writeChangeSection(w io.Writer, title string, changes []manifest.Change, co
 	} else {
 		fmt.Fprintln(w, title)
 	}
+	nameWidth := maxChangeNameWidth(changes)
 	for _, change := range changes {
-		fmt.Fprintf(w, "  - %s\n", change.String())
+		fmt.Fprintf(w, "  %-*s  %s\n", nameWidth, change.Name, changeVersionStr(change))
 	}
+}
+
+// maxChangeNameWidth returns the widest change name in runes, so both output
+// styles can align the version column across entries.
+func maxChangeNameWidth(changes []manifest.Change) int {
+	width := 0
+	for _, c := range changes {
+		if n := utf8.RuneCountInString(c.Name); n > width {
+			width = n
+		}
+	}
+	return width
 }
 
 func writeStatus(w io.Writer, label, message string, color bool, colorCode string, newline bool) {
