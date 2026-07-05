@@ -9,14 +9,27 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - The live `ddmin` progress row now animates a smooth scanner sweep (a bright
-  head with a fading tail) at ~10 fps, and its tested count and elapsed time
-  update continuously between trial events instead of freezing during long
-  installs. Interactive color terminals only; redirected/CI output is
-  unchanged.
+  head with a fading tail), and its tested count and elapsed time update
+  continuously between trial events instead of freezing during long installs.
+  The sweep speeds up with `--jobs` — a visual echo of trial throughput.
+  Interactive color terminals only; redirected/CI output is unchanged.
 - `DEPBISECT_JOBS` environment variable sets the default for `--jobs`
   (the flag still wins). The built-in default stays `1`: parallel trials
   require a verification command that is safe to run concurrently.
 - The GitHub Action gained a `jobs` input, mirroring `--jobs`.
+- Per-ecosystem Docker image variants: `go`, `rust`, and `python` (with uv)
+  tags alongside the default JavaScript image (`latest`), each bundling `git`
+  plus that ecosystem's toolchain.
+- The repository dogfoods its own GitHub Action: a `self-bisect` workflow
+  bisects any dependency-update PR that breaks `go test` and posts the report
+  to the job summary.
+- README and docs/how-it-works.md document the practical `--jobs` ceiling
+  (roughly 4–8) and why returns diminish beyond it.
+- Shell completion for `--base` and `--to` now suggests git refs (branches,
+  tags, remotes) from the repository being bisected, honoring an earlier
+  `--repo <path>` on the command line. Both bash and zsh.
+- Homebrew installs now bundle bash and zsh completions automatically,
+  generated from the installed binary — no shell-profile editing needed.
 
 ### Changed
 
@@ -25,6 +38,11 @@ All notable changes to this project are documented here. The format follows
   a shortened run count is not mistaken for a full flakiness sample.
 - The live ddmin row sizes itself to the terminal, dropping trailing fields
   on narrow terminals instead of wrapping.
+- Classic-style (and redirected/CI) output aligns its columns like C/Rust
+  tooling: trial numbers and change counters pad to a stable width, and
+  change lists render as aligned name/version columns instead of bullets.
+- The Docker runtime image moved from Node 20 (end-of-life April 2026) to
+  Node 22 LTS.
 
 ### Fixed
 

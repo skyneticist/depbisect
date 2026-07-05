@@ -22,3 +22,12 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+
+  # Base images in the Dockerfile (golang builder, node runtime), so an EOL
+  # or vulnerable base gets a PR instead of aging silently.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build

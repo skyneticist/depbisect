@@ -327,6 +327,10 @@ By default the action builds the exact DepBisect source bundled with the selecte
 ref. Set the `version` input to a release tag only when intentionally testing a different
 CLI release.
 
+This repository dogfoods the action on itself: when a PR that touches `go.mod` breaks the
+tests, [self-bisect](.github/workflows/self-bisect.yml) pins the culprit update and posts
+the report to the job summary.
+
 ## Limitations
 
 - Only **direct** dependency changes in your manifest (`package.json`, `Cargo.toml`, `go.mod`,

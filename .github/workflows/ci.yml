@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# Superseded runs on the same PR are cancelled when new commits arrive; pushes
+# to main always run to completion so every mainline commit keeps its status.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -637,3 +643,37 @@ jobs:
             run --repo "$PWD/examples/demo/app" --base HEAD~1 --runs 3 \
             -- node test.js | tee bisect.log
           grep -q leftpad bisect.log
+
+  docker-variants:
+    name: Docker ${{ matrix.target }} variant behavior
+    # The ecosystem variants get the same "is every bundled tool alive" check
+    # as the default js image above; the full in-container bisection runs only
+    # there, since the js fixture is the cheap offline one.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: go
+            check: go version
+          - target: rust
+            check: |
+              cargo --version
+              rustc --version
+          - target: python
+            check: |
+              uv --version
+              python3 --version
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the ${{ matrix.target }} variant
+        run: docker build --target ${{ matrix.target }} -t "depbisect:${{ matrix.target }}" .
+      - name: Entry point prints usage
+        run: docker run --rm "depbisect:${{ matrix.target }}" help
+      - name: Bundled toolchain is functional
+        run: |
+          docker run --rm --entrypoint sh "depbisect:${{ matrix.target }}" -eu -c '
+            git --version
+            ${{ matrix.check }}
+          '

@@ -196,22 +196,35 @@ demos: demo demo-complex demo-jobs demo-swarm demo-cargo demo-go demo-python ## 
 ##@ Docker
 
 .PHONY: docker-build
-docker-build: ## Build the Docker image as depbisect:dev.
+docker-build: ## Build the Docker image as depbisect:dev (TARGET=go|rust|python for an ecosystem variant; default js).
 	$(call need,docker,see https://docs.docker.com/get-docker/)
-	docker build -t depbisect:dev .
+	docker build $(if $(TARGET),--target $(TARGET)) -t depbisect:dev .
 
 .PHONY: docker-run
 docker-run: docker-build ## Run the image against your repo (e.g. make docker-run ARGS="run --base HEAD~1 -- npm test").
 	docker run --rm -v "$$PWD:$$PWD" -w "$$PWD" depbisect:dev $(ARGS)
 
 .PHONY: docker-smoke
-docker-smoke: docker-build ## Mirror the CI docker image behaviour check (needs docker + node).
+docker-smoke: docker-build ## Mirror the CI docker-smoke job: default js image toolchain + a real bisection (needs docker + node).
 	@mkdir -p $(BIN_DIR)
 	docker run --rm depbisect:dev help
 	docker run --rm --entrypoint sh depbisect:dev -eu -c 'git --version; node --version; npm --version; pnpm --version'
 	./examples/make-demo.sh
 	docker run --rm -v "$$PWD:$$PWD" -w "$$PWD" depbisect:dev run --repo "$$PWD/examples/demo/app" --base HEAD~1 --runs 3 -- node test.js | tee $(BIN_DIR)/bisect.log
 	grep -q leftpad $(BIN_DIR)/bisect.log
+
+.PHONY: docker-smoke-variants
+docker-smoke-variants: ## Mirror the CI docker-variants job: go/rust/python image toolchain checks (needs docker).
+	$(call need,docker,see https://docs.docker.com/get-docker/)
+	docker build --target go -t depbisect:dev-go .
+	docker run --rm depbisect:dev-go help >/dev/null
+	docker run --rm --entrypoint sh depbisect:dev-go -eu -c 'git --version; go version'
+	docker build --target rust -t depbisect:dev-rust .
+	docker run --rm depbisect:dev-rust help >/dev/null
+	docker run --rm --entrypoint sh depbisect:dev-rust -eu -c 'git --version; cargo --version; rustc --version'
+	docker build --target python -t depbisect:dev-python .
+	docker run --rm depbisect:dev-python help >/dev/null
+	docker run --rm --entrypoint sh depbisect:dev-python -eu -c 'git --version; uv --version; python3 --version'
 
 ##@ Release & media
 
@@ -237,6 +250,11 @@ install-tools: ## Install the auxiliary dev tools (see notes for golangci-lint).
 	# Recent releases need a current Go toolchain to build from source, so
 	# install the prebuilt binary per the official instructions:
 	#   https://golangci-lint.run/welcome/install/
+	#
+	# Ecosystem toolchains (node+npm, cargo, uv+python) are intentionally NOT
+	# installed here: depbisect drives the toolchain of the project being
+	# bisected, so they are demo prerequisites (see the Demos note above), not
+	# dev tools of this repo.
 	$(GO) install golang.org/x/vuln/cmd/govulncheck@latest
 	$(GO) install github.com/goreleaser/goreleaser/v2@latest
 

@@ -15,14 +15,69 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
     -o /out/depbisect ./cmd/depbisect
 
-# Runtime image carries everything depbisect drives: git for worktrees, plus
-# node, npm, and pnpm (via corepack) for installing candidate dependencies and
-# running verification commands. Debian slim keeps glibc for native npm modules.
-FROM node:20-slim
-# Without a pin, corepack fetches the *latest* pnpm on first use; current pnpm
-# requires Node >=22 and crashes on this image's Node 20 (No such built-in
-# module: node:sqlite). Pin a pnpm that supports Node 20 and bake it into the
-# image so the package manager works offline, with no download at run time.
+# ---------------------------------------------------------------------------
+# Runtime variants: one image per ecosystem, so each pull stays as small as
+# its toolchain allows. Every variant carries git (worktrees) with
+# safe.directory '*' (mounted repos are owned by the host user). Debian keeps
+# glibc for native modules and prebuilt toolchains.
+#
+# The js variant is intentionally LAST: a bare `docker build .` (Makefile,
+# docs, CI docker-smoke) builds the final stage, so the default image stays
+# the JavaScript one that :latest has always pointed at. docker.yml selects
+# the other variants with --target.
+# ---------------------------------------------------------------------------
+
+# uv ships as a distroless binary image. Pulling it through a FROM stage
+# (rather than COPY --from=<ref>) keeps the pin visible to dependabot.
+FROM ghcr.io/astral-sh/uv:0.11 AS uv-dist
+
+# --- go: bisect go.mod projects ---------------------------------------------
+# golang:bookworm is buildpack-deps based, so git, ca-certificates, and a C
+# toolchain (for cgo test builds) are already present.
+FROM golang:1.25-bookworm AS go
+RUN git config --system --add safe.directory '*'
+COPY --from=build /out/depbisect /usr/local/bin/depbisect
+WORKDIR /work
+ENTRYPOINT ["depbisect"]
+CMD ["help"]
+
+# --- rust: bisect Cargo.toml projects ---------------------------------------
+# rust:slim includes cargo, rustc, and the gcc linker, but not git.
+FROM rust:1-slim-bookworm AS rust
+RUN apt-get update \
+ && apt-get upgrade -y \
+ && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && git config --system --add safe.directory '*'
+COPY --from=build /out/depbisect /usr/local/bin/depbisect
+WORKDIR /work
+ENTRYPOINT ["depbisect"]
+CMD ["help"]
+
+# --- python: bisect pyproject.toml projects with uv --------------------------
+# Matches the interpreter CI tests against (setup-python "3.12"). uv is told
+# to use it rather than downloading a managed interpreter at run time.
+FROM python:3.12-slim AS python
+ENV UV_PYTHON_PREFERENCE=only-system
+RUN apt-get update \
+ && apt-get upgrade -y \
+ && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && git config --system --add safe.directory '*'
+COPY --from=uv-dist /uv /uvx /usr/local/bin/
+COPY --from=build /out/depbisect /usr/local/bin/depbisect
+WORKDIR /work
+ENTRYPOINT ["depbisect"]
+CMD ["help"]
+
+# --- js (default): bisect package.json projects with npm or pnpm -------------
+# Node 22 is the active LTS (Node 20 reached end-of-life in April 2026).
+FROM node:22-slim AS js
+# Pin pnpm and bake it into the image: without a pin, corepack fetches the
+# *latest* pnpm on first use — a network download at run time and a moving
+# target that has broken this image before (a pnpm too new for the image's
+# Node crashed on first use). A baked-in known-good version works offline and
+# fails loudly in CI's docker-smoke if an upgrade ever misbehaves.
 ENV COREPACK_DEFAULT_TO_LATEST=0
 RUN apt-get update \
  && apt-get upgrade -y \

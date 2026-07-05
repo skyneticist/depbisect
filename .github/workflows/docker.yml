@@ -24,6 +24,26 @@ permissions:
 jobs:
   image:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # One image per ecosystem (Dockerfile runtime stages). The js variant
+        # keeps the unsuffixed version tags and :latest it has always had; the
+        # others get a version suffix plus a moving ecosystem alias
+        # (ghcr.io/…/depbisect:go, :rust, :python).
+        include:
+          - target: js
+            suffix: ""
+            alias: latest
+          - target: go
+            suffix: "-go"
+            alias: go
+          - target: rust
+            suffix: "-rust"
+            alias: rust
+          - target: python
+            suffix: "-python"
+            alias: python
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v4
@@ -49,17 +69,21 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=${{ steps.ver.outputs.version }}
-            type=raw,value=latest
+            type=raw,value=${{ steps.ver.outputs.version }}${{ matrix.suffix }}
+            # Only tag pushes move the alias (latest/go/rust/python); a
+            # workflow_dispatch republish of an older version must not
+            # re-point it backwards.
+            type=raw,value=${{ matrix.alias }},enable=${{ github.event_name == 'push' }}
 
       - uses: docker/build-push-action@v7
         with:
           context: .
+          target: ${{ matrix.target }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ steps.ver.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=docker-${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.target }}
