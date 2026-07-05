@@ -9,6 +9,7 @@ func TestEcosystemForDispatch(t *testing.T) {
 	}{
 		{"npm", basePkg},
 		{"pnpm", basePkg},
+		{"yarn", basePkg},
 		{"cargo", baseCargo},
 		{"go", baseGoMod},
 		{"uv", basePyproject},
@@ -31,7 +32,7 @@ func TestEcosystemForDispatch(t *testing.T) {
 }
 
 func TestEcosystemForUnknown(t *testing.T) {
-	if _, err := EcosystemFor("yarn"); err == nil {
+	if _, err := EcosystemFor("bun"); err == nil {
 		t.Error("expected error for unknown manager")
 	}
 }
@@ -95,6 +96,7 @@ func TestEcosystemParseLock(t *testing.T) {
 	}{
 		{"npm", `{"lockfileVersion":3,"packages":{"node_modules/a":{"version":"1.2.3"}}}`, "a", "1.2.3"},
 		{"pnpm", "lockfileVersion: '6.0'\ndependencies:\n  a:\n    specifier: ^1\n    version: 1.2.3\n", "a", "1.2.3"},
+		{"yarn", "a@^1:\n  version \"1.2.3\"\n", "a", "1.2.3"},
 		{"cargo", "[[package]]\nname = \"a\"\nversion = \"1.2.3\"\n", "a", "1.2.3"},
 		{"go", "github.com/a/b v1.2.3 h1:xxx\ngithub.com/a/b v1.2.3/go.mod h1:yyy\n", "github.com/a/b", "v1.2.3"},
 		{"uv", "[[package]]\nname = \"a\"\nversion = \"1.2.3\"\n", "a", "1.2.3"},

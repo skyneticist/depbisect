@@ -70,7 +70,7 @@ Flags for run:
                         timeout per dependency install (default none)
   --overall-timeout <dur>
                         timeout for the complete bisection (default none)
-  --pm <npm|pnpm|cargo|go|uv>
+  --pm <npm|pnpm|yarn|cargo|go|uv>
                         package manager (default: auto-detected). uv (Python)
                         bisects pyproject.toml; verify with: uv run -- <cmd>
   --report-md <path>    Markdown report path (default "depbisect-report.md")

@@ -77,6 +77,7 @@ Ecosystems × scenarios. Simple/complex/jobs/swarm are [auto] via `make demos`.
 | --- | --- | --- | --- | --- |
 | npm | auto | auto | auto | auto |
 | pnpm | auto | — | — | — |
+| yarn | auto | — | — | — |
 | cargo | auto | auto | auto | auto |
 | go | auto | auto | auto | auto |
 | uv | auto | — | — | — |

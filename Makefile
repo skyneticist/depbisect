@@ -90,6 +90,7 @@ fuzz: ## Fuzz each target for $(FUZZTIME) (override: make fuzz FUZZTIME=2m).
 	$(GO) test -run='^$$' -fuzz='^FuzzParsePackageJSON$$' -fuzztime=$(FUZZTIME) ./internal/manifest
 	$(GO) test -run='^$$' -fuzz='^FuzzParsePackageLock$$' -fuzztime=$(FUZZTIME) ./internal/manifest
 	$(GO) test -run='^$$' -fuzz='^FuzzParsePnpmLock$$'    -fuzztime=$(FUZZTIME) ./internal/manifest
+	$(GO) test -run='^$$' -fuzz='^FuzzParseYarnLock$$'    -fuzztime=$(FUZZTIME) ./internal/manifest
 	$(GO) test -run='^$$' -fuzz='^FuzzParseCargoToml$$'   -fuzztime=$(FUZZTIME) ./internal/manifest
 	$(GO) test -run='^$$' -fuzz='^FuzzParseCargoLock$$'   -fuzztime=$(FUZZTIME) ./internal/manifest
 	$(GO) test -run='^$$' -fuzz='^FuzzParsePyproject$$'   -fuzztime=$(FUZZTIME) ./internal/manifest
@@ -112,11 +113,11 @@ ci: check cover vuln fuzz ## Full local pre-push mirror: check + cover + vuln + 
 
 ##@ Demos
 # Build, generate an offline example repo, and bisect it. Each target mirrors
-# the matching job in .github/workflows/ci.yml (demo / demo-cargo / demo-go /
-# demo-python), so a green `make demo*` predicts a green pipeline. Everything is
-# offline (file: deps, vendored registries, a file:// GOPROXY, committed wheels);
-# the only requirement is the relevant toolchain (node+npm, cargo, go, or
-# uv+python) on PATH.
+# the matching job in .github/workflows/ci.yml (demo / demo-yarn / demo-cargo /
+# demo-go / demo-python), so a green `make demo*` predicts a green pipeline.
+# Everything is offline (file: deps, vendored registries, a file:// GOPROXY,
+# committed wheels); the only requirement is the relevant toolchain (node+npm,
+# node+classic yarn 1.x, cargo, go, or uv+python) on PATH.
 
 # Constant env for the Go demos; GOPROXY is per-demo and set inline below.
 GO_DEMO_ENV ?= GOSUMDB=off GOFLAGS=-mod=mod GOTOOLCHAIN=local
@@ -161,6 +162,11 @@ demo-swarm: build ## npm: 28-package / 12-replica demo, bisected with --jobs.
 	$(call demo_setup,make-demo-swarm.sh)
 	$(call demo_run,$(BINARY) run --repo examples/demo-swarm/app --base HEAD~1 --runs 3 --jobs 12 -- node test.js)
 
+.PHONY: demo-yarn
+demo-yarn: build ## yarn: bisect the yarn example repo (culprit: leftpad).
+	$(call demo_setup,make-demo-yarn.sh)
+	$(call demo_run,$(BINARY) run --repo examples/demo-yarn/app --base HEAD~1 --runs 3 -- node test.js)
+
 .PHONY: demo-cargo
 demo-cargo: build ## Cargo: simple + complex + jobs + swarm demos.
 	$(call demo_setup,make-demo-cargo.sh)
@@ -190,7 +196,7 @@ demo-python: build ## Python (uv): bisect the offline example repo (culprit: bre
 	$(call demo_run,$(BINARY) run --repo examples/demo-python/app --base HEAD~1 --runs 3 -- uv run -- python check.py)
 
 .PHONY: demos
-demos: demo demo-complex demo-jobs demo-swarm demo-cargo demo-go demo-python ## Run every demo above.
+demos: demo demo-complex demo-jobs demo-swarm demo-yarn demo-cargo demo-go demo-python ## Run every demo above.
 	@printf '\nAll demos passed.\n'
 
 ##@ Docker

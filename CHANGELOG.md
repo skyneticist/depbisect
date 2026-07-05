@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Yarn support: `yarn.lock` is auto-detected alongside the other JavaScript
+  lockfiles — both the classic v1 format and the Berry (v2+) YAML format are
+  parsed — or forced with `--pm yarn`. Installs run `yarn install` with
+  Berry's automatic CI immutable-installs mode disabled, since candidate
+  manifests must be allowed to update the lockfile. Yarn workspaces remain
+  unsupported, matching npm/pnpm.
 - The live `ddmin` progress row now animates a smooth scanner sweep (a bright
   head with a fading tail), and its tested count and elapsed time update
   continuously between trial events instead of freezing during long installs.
