@@ -17,14 +17,14 @@ import (
 )
 
 func TestManagerValid(t *testing.T) {
-	valid := []Manager{NPM, PNPM, CARGO, GO, UV}
+	valid := []Manager{NPM, PNPM, YARN, CARGO, GO, UV}
 	for _, m := range valid {
 		if !m.Valid() {
 			t.Errorf("Manager(%q).Valid() = false, want true", m)
 		}
 	}
 	// Zero value and unknown strings must be invalid.
-	for _, bad := range []Manager{"", "yarn", "bun", "pip"} {
+	for _, bad := range []Manager{"", "bun", "pip"} {
 		if bad.Valid() {
 			t.Errorf("Manager(%q).Valid() = true, want false", bad)
 		}
@@ -46,10 +46,11 @@ func TestDetect(t *testing.T) {
 		{name: "both with override", npmLock: true, pnpmLock: true, override: "pnpm", want: PNPM},
 		{name: "neither", wantErrPart: "lockfile"},
 		{name: "neither with override", override: "npm", want: NPM},
+		{name: "yarn override", override: "yarn", want: YARN},
 		{name: "cargo override", override: "cargo", want: CARGO},
 		{name: "go override", override: "go", want: GO},
 		{name: "uv override", override: "uv", want: UV},
-		{name: "bad override", override: "yarn", wantErrPart: "yarn"},
+		{name: "bad override", override: "bun", wantErrPart: "bun"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -72,16 +73,16 @@ func TestDetect(t *testing.T) {
 
 func TestLockfileNames(t *testing.T) {
 	if NPM.LockfileName() != "package-lock.json" || PNPM.LockfileName() != "pnpm-lock.yaml" ||
-		CARGO.LockfileName() != "Cargo.lock" || GO.LockfileName() != "go.sum" ||
-		UV.LockfileName() != "uv.lock" {
+		YARN.LockfileName() != "yarn.lock" || CARGO.LockfileName() != "Cargo.lock" ||
+		GO.LockfileName() != "go.sum" || UV.LockfileName() != "uv.lock" {
 		t.Error("wrong lockfile names")
 	}
 }
 
 func TestManifestNames(t *testing.T) {
 	if NPM.ManifestName() != "package.json" || PNPM.ManifestName() != "package.json" ||
-		CARGO.ManifestName() != "Cargo.toml" || GO.ManifestName() != "go.mod" ||
-		UV.ManifestName() != "pyproject.toml" {
+		YARN.ManifestName() != "package.json" || CARGO.ManifestName() != "Cargo.toml" ||
+		GO.ManifestName() != "go.mod" || UV.ManifestName() != "pyproject.toml" {
 		t.Error("wrong manifest names")
 	}
 }
@@ -108,6 +109,27 @@ func TestInstallInvocation(t *testing.T) {
 		// the lockfile.
 		if !strings.Contains(strings.Join(c.Args, " "), "--no-frozen-lockfile") {
 			t.Errorf("pnpm args missing --no-frozen-lockfile: %v", c.Args)
+		}
+	})
+
+	t.Run("yarn", func(t *testing.T) {
+		dir := t.TempDir()
+		fake := execx.NewFake()
+		if _, err := (Installer{Runner: fake, Manager: YARN}).Install(context.Background(), dir, nil); err != nil {
+			t.Fatal(err)
+		}
+		c := fake.Calls()[0]
+		if c.Name != "yarn" || !reflect.DeepEqual(c.Args, []string{"install"}) {
+			t.Errorf("yarn cmd = %+v, want name=yarn args=[install]", c)
+		}
+		if !c.AllowTrustedBatch {
+			t.Error("yarn invocation must set AllowTrustedBatch for Windows batch shims")
+		}
+		// Berry auto-enables --immutable when CI=true; candidate manifests
+		// intentionally disagree with the lockfile, so installs must disable it
+		// via the environment (no flag is shared by classic v1 and Berry).
+		if !reflect.DeepEqual(c.ExtraEnv, []string{"YARN_ENABLE_IMMUTABLE_INSTALLS=false"}) {
+			t.Errorf("yarn ExtraEnv = %v, want [YARN_ENABLE_IMMUTABLE_INSTALLS=false]", c.ExtraEnv)
 		}
 	})
 
@@ -522,6 +544,25 @@ func TestVersionGo(t *testing.T) {
 	}
 }
 
+func TestVersionYarn(t *testing.T) {
+	// yarn --version prints only the bare number in both major versions
+	// (classic "1.22.22", Berry "4.3.1"); the manager name must be prefixed
+	// the same way it is for npm and pnpm.
+	fake := execx.NewFake()
+	fake.Default.Result = execx.Result{Stdout: []byte("4.3.1\n")}
+	inst := Installer{Runner: fake, Manager: YARN, LookPath: found}
+	id, err := inst.Version(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "yarn 4.3.1" {
+		t.Errorf("identity = %q, want %q", id, "yarn 4.3.1")
+	}
+	if call := fake.Calls()[0]; !reflect.DeepEqual(call.Args, []string{"--version"}) {
+		t.Errorf("version args = %v, want [--version]", call.Args)
+	}
+}
+
 func TestVersionUv(t *testing.T) {
 	// `uv --version` prints "uv x.y.z"; the leading "uv" must not be doubled.
 	fake := execx.NewFake()
@@ -635,7 +676,7 @@ func mustWrite(t *testing.T, path, body string) {
 func TestDependencyFiles(t *testing.T) {
 	files := DependencyFiles()
 	want := []string{
-		"package.json", "package-lock.json", "pnpm-lock.yaml",
+		"package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
 		"Cargo.toml", "Cargo.lock", "go.mod", "go.sum",
 		"pyproject.toml", "uv.lock",
 	}

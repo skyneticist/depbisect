@@ -1,7 +1,8 @@
 // Package pm abstracts the supported package managers across ecosystems:
-// npm and pnpm for JavaScript, cargo for Rust, go for Go, and uv for Python.
+// npm, pnpm, and yarn for JavaScript, cargo for Rust, go for Go, and uv for
+// Python.
 //
-// All five managers are installed as immutable [Manager] constants. The
+// All six managers are installed as immutable [Manager] constants. The
 // zero-value Manager ("") is intentionally treated as npm in all switch
 // defaults; callers that need to guard against an uninitialized Manager should
 // call [Manager.Valid] before use.
@@ -26,6 +27,7 @@ type Manager string
 const (
 	NPM   Manager = "npm"
 	PNPM  Manager = "pnpm"
+	YARN  Manager = "yarn"
 	CARGO Manager = "cargo"
 	GO    Manager = "go"
 	UV    Manager = "uv"
@@ -35,16 +37,17 @@ const (
 // The zero value ("") returns false.
 func (m Manager) Valid() bool {
 	switch m {
-	case NPM, PNPM, CARGO, GO, UV:
+	case NPM, PNPM, YARN, CARGO, GO, UV:
 		return true
 	}
 	return false
 }
 
 // Detect chooses an npm or pnpm manager from lockfile presence at the target
-// revision. For Cargo, Go, and UV the caller must provide a non-empty override,
-// since those ecosystems are detected by the engine's manifest-presence logic
-// rather than by this function.
+// revision. Cargo, Go, and UV require a non-empty override, since those
+// ecosystems are detected by the engine's manifest-presence logic rather than
+// by this function; yarn likewise requires an override until yarn.lock joins
+// the lockfile detection here.
 //
 // A non-empty override always wins. When override is empty, exactly one of the
 // two npm-ecosystem lockfiles must be present.
@@ -56,6 +59,8 @@ func Detect(hasPackageLock, hasPnpmLock bool, override string) (Manager, error) 
 		return NPM, nil
 	case string(PNPM):
 		return PNPM, nil
+	case string(YARN):
+		return YARN, nil
 	case string(CARGO):
 		return CARGO, nil
 	case string(GO):
@@ -63,7 +68,7 @@ func Detect(hasPackageLock, hasPnpmLock bool, override string) (Manager, error) 
 	case string(UV):
 		return UV, nil
 	default:
-		return "", fmt.Errorf("unsupported package manager %q (supported: npm, pnpm, cargo, go, uv)", override)
+		return "", fmt.Errorf("unsupported package manager %q (supported: npm, pnpm, yarn, cargo, go, uv)", override)
 	}
 	switch {
 	case hasPackageLock && hasPnpmLock:
@@ -83,6 +88,8 @@ func (m Manager) LockfileName() string {
 	switch m {
 	case PNPM:
 		return "pnpm-lock.yaml"
+	case YARN:
+		return "yarn.lock"
 	case CARGO:
 		return "Cargo.lock"
 	case GO:
@@ -113,7 +120,7 @@ func (m Manager) ManifestName() string {
 // supported manager, deduplicated and in a stable order. These are the paths
 // whose history marks a dependency change, used to suggest a --base revision.
 func DependencyFiles() []string {
-	managers := []Manager{NPM, PNPM, CARGO, GO, UV}
+	managers := []Manager{NPM, PNPM, YARN, CARGO, GO, UV}
 	seen := make(map[string]bool)
 	var files []string
 	for _, m := range managers {
@@ -135,6 +142,15 @@ func (m Manager) installArgs() []string {
 		// candidate manifests intentionally disagree with the lockfile,
 		// so freezing must be disabled explicitly.
 		return []string{"install", "--no-frozen-lockfile"}
+	case YARN:
+		// `yarn install` is the correct verb for both classic v1 and Berry.
+		// Berry enables --immutable automatically when CI=true, which must be
+		// disabled because candidate manifests intentionally disagree with the
+		// lockfile — but no flag for that is accepted by both major versions
+		// (--no-immutable is Berry-only, and Berry rejects unknown flags), so
+		// Install sets YARN_ENABLE_IMMUTABLE_INSTALLS=false in the environment
+		// instead; classic v1 harmlessly ignores the setting.
+		return []string{"install"}
 	case CARGO:
 		// cargo fetch resolves and downloads dependencies (updating Cargo.lock
 		// to match the candidate manifest) without compiling. Build and test
@@ -185,6 +201,14 @@ func goInstallEnv() []string {
 	existing := os.Getenv("GOFLAGS")
 	merged := mergeModFlag(existing)
 	return []string{"GOFLAGS=" + merged}
+}
+
+// yarnInstallEnv disables Berry's (yarn v2+) automatic immutable-installs
+// mode, which activates when CI=true and would reject the lockfile updates
+// that DepBisect's candidate manifests require. See installArgs for why this
+// is an environment setting rather than a flag.
+func yarnInstallEnv() []string {
+	return []string{"YARN_ENABLE_IMMUTABLE_INSTALLS=false"}
 }
 
 // mergeModFlag removes any existing -mod=… token from flags and appends
@@ -265,7 +289,8 @@ func (i Installer) Version(ctx context.Context) (string, error) {
 // PM-native error with no indication of which worktree caused the failure.
 //
 // For Go modules, Install injects a merged GOFLAGS that ensures -mod=mod
-// without discarding any other flags the user already has in GOFLAGS.
+// without discarding any other flags the user already has in GOFLAGS. For
+// yarn, it disables Berry's automatic immutable-installs mode.
 func (i Installer) Install(ctx context.Context, dir string, stream io.Writer) (execx.Result, error) {
 	if dir == "" {
 		return execx.Result{}, fmt.Errorf("install %s: target directory must not be empty", i.Manager)
@@ -278,8 +303,11 @@ func (i Installer) Install(ctx context.Context, dir string, stream io.Writer) (e
 		return execx.Result{}, fmt.Errorf("install %s: target directory %q is not a directory", i.Manager, dir)
 	}
 	var extraEnv []string
-	if i.Manager == GO {
+	switch i.Manager {
+	case GO:
 		extraEnv = goInstallEnv()
+	case YARN:
+		extraEnv = yarnInstallEnv()
 	}
 	return i.Runner.Run(ctx, execx.Cmd{
 		Dir:               dir,
