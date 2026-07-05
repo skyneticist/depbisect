@@ -311,7 +311,7 @@ func TestE2EFindsCulpritNpm(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	for _, want := range []string{"Changes 3 analyzed", "Breaking dependencies", "leftpad 1.0.0 -> 2.0.0", "Evidence 3/3 failing runs"} {
+	for _, want := range []string{"Changes 3 analyzed", "Breaking dependencies", "leftpad  1.0.0 -> 2.0.0", "Evidence 3/3 failing runs"} {
 		if !strings.Contains(res.stdout, want) {
 			t.Errorf("stdout missing %q:\n%s", want, res.stdout)
 		}
@@ -381,7 +381,7 @@ func TestE2EParallelFindsCulpritNpm(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	for _, want := range []string{"Breaking dependencies", "leftpad 1.0.0 -> 2.0.0", "Evidence 3/3 failing runs"} {
+	for _, want := range []string{"Breaking dependencies", "leftpad  1.0.0 -> 2.0.0", "Evidence 3/3 failing runs"} {
 		if !strings.Contains(res.stdout, want) {
 			t.Errorf("stdout missing %q:\n%s", want, res.stdout)
 		}
@@ -406,7 +406,7 @@ func TestE2EFindsCulpritPnpm(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	if !strings.Contains(res.stdout, "leftpad 1.0.0 -> 2.0.0") {
+	if !strings.Contains(res.stdout, "leftpad  1.0.0 -> 2.0.0") {
 		t.Errorf("stdout:\n%s", res.stdout)
 	}
 	log, _ := os.ReadFile(logPath)

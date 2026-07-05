@@ -229,7 +229,7 @@ func TestSummaryMinimalFound(t *testing.T) {
 		"Outcome minimal-set-found",
 		"Changes 43 analyzed",
 		"Breaking dependencies",
-		"@acme/parser 3.8.1 -> 3.9.0",
+		"@acme/parser  3.8.1 -> 3.9.0",
 		"Evidence 3/3 failing runs",
 		"Report depbisect-report.md",
 	} {
@@ -268,7 +268,8 @@ func TestSummaryInconclusiveBestKnownSet(t *testing.T) {
 	var buf bytes.Buffer
 	printSummary(&buf, res, "", "", styleClassic)
 	got := buf.String()
-	for _, want := range []string{"Best-known failing set", "alpha 1 -> 2", "not proven 1-minimal"} {
+	// Names pad to the widest ("alpha") plus a two-space column gap.
+	for _, want := range []string{"Best-known failing set", "alpha  1 -> 2", "beta   1 -> 2", "not proven 1-minimal"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("summary missing %q:\n%s", want, got)
 		}
@@ -382,7 +383,7 @@ func TestModernProgressCollapsesLifecycle(t *testing.T) {
 
 func TestProgressFormatsTrialLifecycle(t *testing.T) {
 	var buf bytes.Buffer
-	p := newProgress(&buf, true, styleClassic)
+	p := newProgress(&buf, true, styleClassic, 1)
 	p.Trial(7, "candidate", 2, 10, "preparing", 0)
 	p.Trial(7, "candidate", 2, 10, "installing", 1200*time.Millisecond)
 	p.Trial(7, "candidate", 2, 10, "verifying", 3200*time.Millisecond)
@@ -392,7 +393,7 @@ func TestProgressFormatsTrialLifecycle(t *testing.T) {
 	for _, want := range []string{
 		"Trial 7", "candidate", "2/10 changes", "preparing",
 		"installing | 1.2s elapsed",
-		"verifying | 3.2s elapsed", "FAIL trial 7", "5s",
+		"verifying | 3.2s elapsed", "FAIL trial  7", "5s",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("progress missing %q:\n%s", want, got)
@@ -402,7 +403,7 @@ func TestProgressFormatsTrialLifecycle(t *testing.T) {
 
 func TestProgressDefaultCompactsTrialLifecycle(t *testing.T) {
 	var buf bytes.Buffer
-	p := newProgress(&buf, false, styleClassic)
+	p := newProgress(&buf, false, styleClassic, 1)
 	p.Trial(1, "baseline-old", 0, 10, "preparing", 0)
 	p.Trial(1, "baseline-old", 0, 10, "installing", time.Second)
 	p.Trial(1, "baseline-old", 0, 10, "verifying", 2*time.Second)
@@ -415,7 +416,7 @@ func TestProgressDefaultCompactsTrialLifecycle(t *testing.T) {
 	for _, want := range []string{
 		"baseline without updates",
 		"preparing",
-		"EXPECTED trial 1",
+		"EXPECTED trial  1",
 		"PASS",
 		"3s",
 	} {
@@ -455,7 +456,7 @@ func TestProgressInteractiveRefreshesActiveTrial(t *testing.T) {
 	if !strings.Contains(got, "\r\x1b[2K") {
 		t.Fatalf("interactive progress did not clear the active line: %q", got)
 	}
-	if strings.Count(got, "\n") != 1 || !strings.Contains(got, "EXPECTED trial 1") ||
+	if strings.Count(got, "\n") != 1 || !strings.Contains(got, "EXPECTED trial  1") ||
 		!strings.Contains(got, "| FAIL |") ||
 		!strings.Contains(got, "3s") {
 		t.Fatalf("interactive progress should finish with one completed line: %q", got)
@@ -464,7 +465,7 @@ func TestProgressInteractiveRefreshesActiveTrial(t *testing.T) {
 
 func TestProgressMarksUnexpectedBaselineOutcome(t *testing.T) {
 	var buf bytes.Buffer
-	p := newProgress(&buf, false, styleClassic)
+	p := newProgress(&buf, false, styleClassic, 1)
 	p.Trial(2, "baseline-new", 10, 10, "pass", 3*time.Second)
 
 	got := buf.String()

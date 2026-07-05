@@ -152,26 +152,11 @@ var (
 	errMissingSeparator = errors.New(`missing "--" separator before the command`)
 )
 
-// parseRunArgs splits args at the first "--": flags before it, the verification
-// command after it. When the separator is absent the leftover tokens are still
-// returned as the intended command (via errMissingSeparator) so the caller can
-// show the corrected form.
-func parseRunArgs(args []string) (*runOptions, error) {
-	sep := -1
-	for i, a := range args {
-		if a == "--" {
-			sep = i
-			break
-		}
-	}
-	hasSep := sep != -1
-	flagArgs := args
-	var command []string
-	if hasSep {
-		flagArgs, command = args[:sep], args[sep+1:]
-	}
-
-	opts := &runOptions{}
+// runFlagSet registers every `depbisect run` flag on a fresh FlagSet bound to
+// opts (styleName receives --style; it is resolved against DEPBISECT_STYLE
+// after parsing). The completion drift test enumerates this set to keep the
+// shell completion scripts in sync — a new flag must appear there too.
+func runFlagSet(opts *runOptions, styleName *string) *flag.FlagSet {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&opts.base, "base", "", "")
@@ -193,8 +178,32 @@ func parseRunArgs(args []string) (*runOptions, error) {
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "")
 	fs.BoolVar(&opts.quiet, "quiet", false, "")
 	fs.BoolVar(&opts.verbose, "verbose", false, "")
+	fs.StringVar(styleName, "style", "", "")
+	return fs
+}
+
+// parseRunArgs splits args at the first "--": flags before it, the verification
+// command after it. When the separator is absent the leftover tokens are still
+// returned as the intended command (via errMissingSeparator) so the caller can
+// show the corrected form.
+func parseRunArgs(args []string) (*runOptions, error) {
+	sep := -1
+	for i, a := range args {
+		if a == "--" {
+			sep = i
+			break
+		}
+	}
+	hasSep := sep != -1
+	flagArgs := args
+	var command []string
+	if hasSep {
+		flagArgs, command = args[:sep], args[sep+1:]
+	}
+
+	opts := &runOptions{}
 	var styleName string
-	fs.StringVar(&styleName, "style", "", "")
+	fs := runFlagSet(opts, &styleName)
 	if err := fs.Parse(flagArgs); err != nil {
 		return nil, err
 	}
@@ -317,7 +326,7 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 	if opts.quiet {
 		progressWriter = io.Discard
 	}
-	progressOutput := newProgress(progressWriter, opts.verbose, opts.style)
+	progressOutput := newProgress(progressWriter, opts.verbose, opts.style, opts.jobs)
 	eng := &engine.Engine{
 		Git: git,
 		NewInstaller: func(m pm.Manager) engine.Installer {

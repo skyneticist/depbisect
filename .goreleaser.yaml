@@ -69,6 +69,11 @@ brews:
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     skip_upload: false
+    # Generate and install bash/zsh completions from the installed binary, so
+    # brew users get tab completion with no rc-file editing. Only the shells
+    # `depbisect completion` actually supports are requested.
+    extra_install: |
+      generate_completions_from_executable(bin/"depbisect", "completion", shells: [:bash, :zsh])
 
 # Scoop (Windows) manifest publishing is ENABLED (skip_upload: false below). It
 # pushes to the skyneticist/scoop-bucket repo using SCOOP_BUCKET_GITHUB_TOKEN.

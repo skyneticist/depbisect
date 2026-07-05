@@ -137,7 +137,8 @@ Smoke every install path on a clean machine/container before tagging:
 - `scoop install depbisect` (Windows)
 - `install.sh` (checksum verified)
 - `go install .../cmd/depbisect@latest`
-- Docker image (`ghcr.io/...`) — bundled git/node/npm/pnpm [auto in CI].
+- Docker images (`ghcr.io/...`) — default js variant (git/node/npm/pnpm) plus the
+  `go`, `rust`, and `python` (uv) variants [auto in CI: `docker-smoke` + `docker-variants`].
 
 ## 11. Release gate
 
@@ -154,7 +155,8 @@ Tag only when all [gate] rows pass **and**:
 ```sh
 make ci        # fmt, vet, lint, test, race, cover, vuln, fuzz smoke
 make demos     # end-to-end bisection across every ecosystem
-make docker-smoke
+make docker-smoke           # default js image: toolchain + real bisection
+make docker-smoke-variants  # go / rust / python images: toolchain checks
 ```
 
 Exploratory [exp] items are run by hand against `make build` output; findings

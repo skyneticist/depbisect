@@ -1,0 +1,64 @@
+name: Self-bisect
+
+# Dogfooding: when a dependency-changing PR breaks the tests, run depbisect on
+# its own repository (via the local action) to pin the culprit before a human
+# reads the log. Healthy dependency PRs skip the bisection entirely — the job
+# then just mirrors `go test`. A manual run (workflow_dispatch) bisects any
+# range on demand; the action treats exit code 2 (not reproduced) as success,
+# so running it on a green tree is safe.
+on:
+  pull_request:
+    paths: ["go.mod", "go.sum"]
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Base revision to bisect from (e.g. a tag or SHA)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  self-bisect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # depbisect needs the base revision
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+
+      - name: Test with the updated dependencies
+        if: github.event_name == 'pull_request'
+        id: test
+        continue-on-error: true
+        run: go test ./...
+
+      - name: Bisect the dependency updates
+        # PR path: only when the tests just failed. Dispatch path: always.
+        if: github.event_name == 'workflow_dispatch' || steps.test.outcome == 'failure'
+        id: bisect
+        uses: ./
+        with:
+          base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.base }}
+          command: go test ./...
+          pm: go
+
+      - name: Publish the report to the job summary
+        if: steps.bisect.conclusion == 'success' && hashFiles('depbisect-report.md') != ''
+        run: cat depbisect-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        if: steps.bisect.conclusion == 'success'
+        with:
+          name: self-bisect-report
+          path: depbisect-report.*
+          if-no-files-found: ignore
+
+      - name: Propagate the test failure
+        if: steps.test.outcome == 'failure'
+        run: |
+          echo "::error::go test failed with the updated dependencies; depbisect outcome: ${{ steps.bisect.outputs.outcome }}"
+          exit 1
