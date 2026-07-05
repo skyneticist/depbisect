@@ -82,12 +82,33 @@ shasum -c --ignore-missing checksums.txt
 go install github.com/skyneticist/depbisect/cmd/depbisect@latest
 ```
 
-**Docker** — the image bundles `git`, `node`, npm, and pnpm; mount your repo at `/work`:
+**Docker** — one image variant per ecosystem, each bundling `git` plus that ecosystem's
+toolchain. The default (`latest`, also `X.Y.Z`) covers JavaScript (`node`, npm, pnpm);
+the `go`, `rust`, and `python` tags (also `X.Y.Z-go` etc.; `python` bundles uv) cover the
+rest. Mount your repo at `/work`:
 
 ```sh
 docker run --rm -v "$PWD:/work" ghcr.io/skyneticist/depbisect \
   run --base origin/main --runs 3 -- npm test
+
+# Cargo, Go, or Python project? Pick the matching variant:
+docker run --rm -v "$PWD:/work" ghcr.io/skyneticist/depbisect:go \
+  run --base origin/main --runs 3 -- go test ./...
 ```
+
+**Shell completion** (bash and zsh) — Homebrew installs it automatically (new shells
+just work); for other install methods, add one line to your shell profile:
+
+```sh
+# ~/.zshrc — after compinit:
+source <(depbisect completion zsh)
+
+# ~/.bashrc:
+source <(depbisect completion bash)
+```
+
+Completing `--base` or `--to` suggests your repo's git refs — branches, tags, and
+remotes — honoring an earlier `--repo <path>` on the line.
 
 ## Quick start
 
