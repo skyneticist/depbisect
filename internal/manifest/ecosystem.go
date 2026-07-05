@@ -33,14 +33,17 @@ type Ecosystem interface {
 }
 
 // EcosystemFor returns the Ecosystem for a package manager. The manager keys
-// match the string values of pm.Manager ("npm", "pnpm", "cargo", "go", "uv");
-// keying on the bare string keeps the manifest package decoupled from package pm.
+// match the string values of pm.Manager ("npm", "pnpm", "yarn", "cargo", "go",
+// "uv"); keying on the bare string keeps the manifest package decoupled from
+// package pm.
 func EcosystemFor(manager string) (Ecosystem, error) {
 	switch manager {
 	case "npm":
 		return jsEcosystem{parseLock: ParsePackageLock}, nil
 	case "pnpm":
 		return jsEcosystem{parseLock: ParsePnpmLock}, nil
+	case "yarn":
+		return jsEcosystem{parseLock: ParseYarnLock}, nil
 	case "cargo":
 		return cargoEcosystem{}, nil
 	case "go":
@@ -58,8 +61,8 @@ func (p *PackageJSON) HasWorkspaceLayout() bool { return p.HasWorkspaces }
 // HasWorkspaceLayout implements Parsed.
 func (c *CargoToml) HasWorkspaceLayout() bool { return c.HasWorkspace }
 
-// jsEcosystem handles package.json manifests for npm and pnpm; only the
-// lockfile parser differs between the two.
+// jsEcosystem handles package.json manifests for npm, pnpm, and yarn; only
+// the lockfile parser differs among them.
 type jsEcosystem struct {
 	parseLock func([]byte) (Resolved, error)
 }

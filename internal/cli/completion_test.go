@@ -39,7 +39,7 @@ func TestCompletionScriptsCoverAllFlags(t *testing.T) {
 // exact supported manager set in both shells. The uv omission shipped
 // unnoticed because earlier checks compared flag names, not value lists.
 func TestCompletionScriptsCoverAllManagers(t *testing.T) {
-	managers := []pm.Manager{pm.NPM, pm.PNPM, pm.CARGO, pm.GO, pm.UV}
+	managers := []pm.Manager{pm.NPM, pm.PNPM, pm.YARN, pm.CARGO, pm.GO, pm.UV}
 
 	extract := func(t *testing.T, script string, re *regexp.Regexp, shell string) []string {
 		t.Helper()

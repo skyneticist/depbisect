@@ -545,6 +545,64 @@ func TestRunFindsSingleCulpritCargo(t *testing.T) {
 	}
 }
 
+const yarnLockOld = `# yarn lockfile v1
+
+alpha@1.0.0:
+  version "1.0.0"
+
+beta@3.0.0:
+  version "3.0.0"
+
+gamma@5.0.0:
+  version "5.0.0"
+`
+const yarnLockNew = `# yarn lockfile v1
+
+alpha@1.1.0:
+  version "1.1.0"
+
+beta@3.2.0:
+  version "3.2.0"
+
+gamma@5.5.0:
+  version "5.5.0"
+`
+
+func threeChangeYarnRepo() *fakeGit {
+	git := threeChangeRepo()
+	for _, sha := range []string{"sha-base", "sha-head"} {
+		delete(git.files[sha], "package-lock.json")
+	}
+	git.files["sha-base"]["yarn.lock"] = yarnLockOld
+	git.files["sha-head"]["yarn.lock"] = yarnLockNew
+	return git
+}
+
+// TestRunFindsSingleCulpritYarn exercises the whole engine over a yarn repo:
+// yarn.lock auto-detection, the shared package.json diff/render, and
+// yarn.lock (classic v1) annotation.
+func TestRunFindsSingleCulpritYarn(t *testing.T) {
+	env := newEnv(t, threeChangeYarnRepo(), func(deps map[string]string) bool {
+		return deps["beta"] == "3.2.0"
+	}, 3)
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeMinimalFound {
+		t.Fatalf("outcome = %q, diagnostics %v", res.Outcome, res.Diagnostics)
+	}
+	if res.PackageManager != "yarn" {
+		t.Errorf("pm = %q, want yarn", res.PackageManager)
+	}
+	if got := minimalNames(res); ids(got) != "beta" {
+		t.Errorf("minimal = %v, want [beta]", got)
+	}
+	if res.Minimal[0].OldResolved != "3.0.0" || res.Minimal[0].NewResolved != "3.2.0" {
+		t.Errorf("resolved versions not annotated from yarn.lock: %+v", res.Minimal[0])
+	}
+}
+
 const goSumOld = `example.com/alpha v1.0.0 h1:aaa
 example.com/alpha v1.0.0/go.mod h1:aaamod
 example.com/beta v1.3.0 h1:bbb
@@ -1143,6 +1201,24 @@ func TestRunDirtyManifestWarning(t *testing.T) {
 	}
 }
 
+func TestRunDirtyYarnLockWarnsOnNpmRepo(t *testing.T) {
+	// warnDirty probes all three JS lockfiles regardless of the detected
+	// manager, so a stray dirty yarn.lock surfaces even on an npm repo.
+	git := threeChangeRepo()
+	git.dirty = map[string]bool{"yarn.lock": true}
+	env := newEnv(t, git, func(deps map[string]string) bool {
+		return deps["beta"] == "3.2.0"
+	}, 1)
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(res.Diagnostics, "\n")
+	if !strings.Contains(joined, "yarn.lock") || !strings.Contains(joined, "uncommitted") {
+		t.Errorf("diagnostics = %v, want uncommitted yarn.lock warning", res.Diagnostics)
+	}
+}
+
 func TestRunZeroChangesWithDirtyManifestStillWarns(t *testing.T) {
 	// A user whose uncommitted package.json edits are the only difference
 	// gets "no changes" — the dirty warning is essential context there.
@@ -1470,6 +1546,22 @@ func TestRunDetectsAmbiguousEcosystems(t *testing.T) {
 	_, err := env.eng.Run(context.Background(), baseOpts())
 	if err == nil || !strings.Contains(err.Error(), "multiple manifests found") {
 		t.Fatalf("err = %v, want ambiguous-ecosystem error", err)
+	}
+	if len(env.tempDirs) != 0 {
+		t.Error("no worktree should be created when detection is ambiguous")
+	}
+}
+
+func TestRunDetectsAmbiguousJSLockfiles(t *testing.T) {
+	// package-lock.json and yarn.lock both present at --to is ambiguous
+	// without --pm, and the error names the colliding lockfiles.
+	git := threeChangeRepo()
+	git.files["sha-head"]["yarn.lock"] = yarnLockNew
+	env := newEnv(t, git, nil, 1)
+	_, err := env.eng.Run(context.Background(), baseOpts())
+	if err == nil || !strings.Contains(err.Error(), "multiple lockfiles found") ||
+		!strings.Contains(err.Error(), "yarn.lock") {
+		t.Fatalf("err = %v, want ambiguous-lockfile error naming yarn.lock", err)
 	}
 	if len(env.tempDirs) != 0 {
 		t.Error("no worktree should be created when detection is ambiguous")

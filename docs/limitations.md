@@ -3,9 +3,8 @@
 ## Not supported (DepBisect refuses with a clear error)
 
 - **Workspaces.** npm/yarn `workspaces` in `package.json`, `pnpm-workspace.yaml` repositories, Cargo `[workspace]` manifests (including virtual manifests), Go `go.work` workspaces, and uv `[tool.uv.workspace]` workspaces.
-- **Yarn.** For JavaScript, only npm and pnpm lockfiles are recognized.
-- **Missing JavaScript lockfile.** For npm/pnpm a `package-lock.json` or `pnpm-lock.yaml` must exist at `--to` (or pass `--pm` explicitly). Cargo needs no lockfile — `Cargo.lock` is optional and only enriches diagnostics.
-- **Ambiguous detection.** If multiple manifests exist (for example a `package.json` and a `Cargo.toml`), or both JavaScript lockfiles exist, choose with `--pm npm|pnpm|cargo|go|uv`.
+- **Missing JavaScript lockfile.** For npm/pnpm/yarn a `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock` must exist at `--to` (or pass `--pm` explicitly). Cargo needs no lockfile — `Cargo.lock` is optional and only enriches diagnostics.
+- **Ambiguous detection.** If multiple manifests exist (for example a `package.json` and a `Cargo.toml`), or more than one JavaScript lockfile exists, choose with `--pm npm|pnpm|yarn|cargo|go|uv`.
 
 ## Supported but with caveats (reported as diagnostics, never silent)
 
@@ -29,6 +28,7 @@
   filesystem deletion is synchronous and cannot be canceled, so a stalled
   filesystem can extend process runtime beyond the overall timeout.
 - **Version spec edge cases.** pnpm v5 lockfile versions with both build metadata and a peer suffix (e.g. `1.2.3+build_meta`) may display a truncated resolved version. Display-only; does not affect bisection.
+- **Yarn multi-version resolutions.** `yarn.lock` is keyed by version range, so one package can resolve to several versions at once when transitive ranges conflict. Such packages have no single resolved version: their annotations are left blank and lockfile-only diagnostics skip them. Display-only; does not affect bisection.
 - **Cargo without a lockfile.** `Cargo.lock` is optional; without it, resolved-version annotations and lockfile-only diagnostics are unavailable, but bisection still works (candidates resolve via `cargo fetch`).
 - **Cargo non-versioned dependencies.** `git`, `path`, and workspace-inherited (`foo.workspace = true`) dependencies carry no version requirement and are not bisected.
 - **Cargo candidate formatting.** Candidate `Cargo.toml` files are re-serialized, so comments and original formatting are not preserved (visible only under `--keep-worktrees`). Reverting a *removed* table-form dependency restores its version but not sibling keys such as `features`.

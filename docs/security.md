@@ -2,7 +2,7 @@
 
 ## Model
 
-DepBisect runs with your privileges, in your repository, and executes two kinds of subprocesses: the package manager (`npm`/`pnpm install`) and the verification command you supply. Installing dependencies executes lifecycle scripts of the candidate dependency versions, exactly as a manual install would — bisecting untrusted dependency ranges therefore executes untrusted code. Run it in the same environment you would use for `npm install` of those versions (e.g. a CI sandbox).
+DepBisect runs with your privileges, in your repository, and executes two kinds of subprocesses: the package manager (`npm`/`pnpm`/`yarn install`) and the verification command you supply. Installing dependencies executes lifecycle scripts of the candidate dependency versions, exactly as a manual install would — bisecting untrusted dependency ranges therefore executes untrusted code. Run it in the same environment you would use for `npm install` of those versions (e.g. a CI sandbox).
 
 ## What DepBisect does
 
