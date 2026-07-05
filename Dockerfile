@@ -3,7 +3,7 @@
 # Cross-compile the static binary for the requested target platform. Running the
 # build stage on the native BUILDPLATFORM (and letting Go cross-compile via
 # TARGETOS/TARGETARCH) keeps multi-arch builds fast — no emulation for the build.
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=docker
@@ -34,7 +34,7 @@ FROM ghcr.io/astral-sh/uv:0.11 AS uv-dist
 # --- go: bisect go.mod projects ---------------------------------------------
 # golang:bookworm is buildpack-deps based, so git, ca-certificates, and a C
 # toolchain (for cgo test builds) are already present.
-FROM golang:1.25-bookworm AS go
+FROM golang:1.26-bookworm AS go
 RUN git config --system --add safe.directory '*'
 COPY --from=build /out/depbisect /usr/local/bin/depbisect
 WORKDIR /work
