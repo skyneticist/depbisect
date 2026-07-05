@@ -149,6 +149,29 @@ go build ./cmd/depbisect
 Both runs report the identical twelve-package minimal set (`replica-01` …
 `replica-12`). Re-run `make-demo-swarm.sh` to reset the generated repository.
 
+## Yarn demo
+
+`make-demo-yarn.sh` generates a yarn equivalent of the simple demo at
+`examples/demo-yarn/`. It needs `git`, `node`, and classic `yarn` (1.x), but
+**no network**: the dependencies are local `file:` packages. The generated
+`yarn.lock` is the classic v1 format — Berry lockfile parsing is covered by
+the manifest unit tests, and the generator refuses Berry because its
+Plug'n'Play default would break plain `node test.js`.
+
+The repo mirrors the npm demo: two commits, two bumped dependencies, and only
+`leftpad 1.0.0 -> 2.0.0` breaks `node test.js`. Candidate installs run
+`yarn install`, which reconciles `yarn.lock` inside the worktree only.
+
+```sh
+./examples/make-demo-yarn.sh
+go build ./cmd/depbisect
+./depbisect run --repo examples/demo-yarn/app --base HEAD~1 --runs 3 -- node test.js
+```
+
+Expected result: minimal failing set = `leftpad 1.0.0 -> 2.0.0`, detected as
+yarn from `yarn.lock` with resolved versions annotated from it. Re-run the
+script any time to reset the generated repository.
+
 ## Rust / Cargo demos
 
 `make-demo-cargo.sh` and `make-demo-cargo-complex.sh` generate the Cargo

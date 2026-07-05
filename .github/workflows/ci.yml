@@ -327,6 +327,61 @@ jobs:
           path: depbisect-*-report.*
           if-no-files-found: ignore
 
+  demo-yarn:
+    name: Yarn CLI smoke test against example repo
+    # Classic yarn (1.x) is preinstalled on GitHub's ubuntu and macos runners,
+    # matching the npm demo job's reliance on a preinstalled toolchain. The
+    # generated yarn.lock is the classic v1 format; Berry lockfile parsing is
+    # covered by the manifest unit tests.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: Generate yarn example repo
+        run: ./examples/make-demo-yarn.sh
+      - name: Build CLI
+        run: go build ./cmd/depbisect
+      - name: Bisect the yarn example repo
+        run: |
+          ./depbisect run \
+            --repo examples/demo-yarn/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --report-md depbisect-yarn-report.md \
+            --report-json depbisect-yarn-report.json \
+            -- node test.js
+      - name: Assert the yarn culprit was identified
+        run: |
+          node -e '
+            const r = require("./depbisect-yarn-report.json");
+            const c = r.minimalSet && r.minimalSet[0];
+            const valid =
+              r.outcome === "minimal-set-found" &&
+              r.packageManager === "yarn" &&
+              r.minimalSet.length === 1 &&
+              c.name === "leftpad" &&
+              c.oldResolved === "1.0.0" &&
+              c.newResolved === "2.0.0";
+            if (!valid) {
+              console.error("unexpected result:", JSON.stringify({outcome: r.outcome, packageManager: r.packageManager, minimalSet: r.minimalSet}, null, 2));
+              process.exit(1);
+            }
+            console.log("yarn demo verified: culprit =", c.name, c.oldResolved, "->", c.newResolved, "reproduced", r.confidence.failures + "/" + r.confidence.runs);
+          '
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: yarn-demo-reports-${{ matrix.os }}
+          path: depbisect-yarn-report.*
+          if-no-files-found: ignore
+
   demo-cargo:
     name: Cargo CLI smoke test against example repo
     # cargo is preinstalled on GitHub's ubuntu and macos runners, matching the
