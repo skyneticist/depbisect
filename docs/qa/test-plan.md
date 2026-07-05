@@ -138,7 +138,7 @@ Smoke every install path on a clean machine/container before tagging:
 - `scoop install depbisect` (Windows)
 - `install.sh` (checksum verified)
 - `go install .../cmd/depbisect@latest`
-- Docker images (`ghcr.io/...`) — default js variant (git/node/npm/pnpm) plus the
+- Docker images (`ghcr.io/...`) — default js variant (git/node/npm/pnpm/yarn) plus the
   `go`, `rust`, and `python` (uv) variants [auto in CI: `docker-smoke` + `docker-variants`].
 
 ## 11. Release gate

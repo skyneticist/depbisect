@@ -83,7 +83,7 @@ go install github.com/skyneticist/depbisect/cmd/depbisect@latest
 ```
 
 **Docker** — one image variant per ecosystem, each bundling `git` plus that ecosystem's
-toolchain. The default (`latest`, also `X.Y.Z`) covers JavaScript (`node`, npm, pnpm);
+toolchain. The default (`latest`, also `X.Y.Z`) covers JavaScript (`node`, npm, pnpm, classic yarn);
 the `go`, `rust`, and `python` tags (also `X.Y.Z-go` etc.; `python` bundles uv) cover the
 rest. Mount your repo at `/work`:
 
