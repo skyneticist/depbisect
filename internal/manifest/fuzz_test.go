@@ -81,6 +81,30 @@ func FuzzParsePnpmLock(f *testing.F) {
 	})
 }
 
+// FuzzParseYarnLock checks that yarn.lock parsing never panics and is
+// deterministic across both the classic v1 and Berry YAML formats.
+func FuzzParseYarnLock(f *testing.F) {
+	f.Add([]byte("# yarn lockfile v1\n\nalpha@^1.0.0:\n  version \"1.0.3\"\n"))
+	f.Add([]byte("\"@scope/a@^1.0.0\", \"@scope/a@^1.2.0\":\n  version \"1.2.3\"\n"))
+	f.Add([]byte("__metadata:\n  version: 8\n\n\"alpha@npm:^1.0.0\":\n  version: 1.0.3\n"))
+	f.Add([]byte(":"))
+	f.Add([]byte("broken"))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		first, err := ParseYarnLock(data)
+		if err != nil {
+			return
+		}
+		second, err := ParseYarnLock(data)
+		if err != nil {
+			t.Fatalf("non-deterministic error on identical input: %v", err)
+		}
+		if !reflect.DeepEqual(first, second) {
+			t.Fatalf("non-deterministic parse: %v vs %v", first, second)
+		}
+	})
+}
+
 // FuzzParseCargoToml checks that Cargo.toml parsing never panics and that any
 // manifest which parses cleanly round-trips: rendering it with no changes
 // applied and re-parsing must yield an identical set of dependency
