@@ -43,15 +43,14 @@ func (m Manager) Valid() bool {
 	return false
 }
 
-// Detect chooses an npm or pnpm manager from lockfile presence at the target
-// revision. Cargo, Go, and UV require a non-empty override, since those
-// ecosystems are detected by the engine's manifest-presence logic rather than
-// by this function; yarn likewise requires an override until yarn.lock joins
-// the lockfile detection here.
+// Detect chooses among the JavaScript managers — npm, pnpm, or yarn — from
+// lockfile presence at the target revision. Cargo, Go, and UV require a
+// non-empty override, since those ecosystems are detected by the engine's
+// manifest-presence logic rather than by this function.
 //
-// A non-empty override always wins. When override is empty, exactly one of the
-// two npm-ecosystem lockfiles must be present.
-func Detect(hasPackageLock, hasPnpmLock bool, override string) (Manager, error) {
+// A non-empty override always wins. When override is empty, exactly one of
+// the three JS-ecosystem lockfiles must be present.
+func Detect(hasPackageLock, hasPnpmLock, hasYarnLock bool, override string) (Manager, error) {
 	switch override {
 	case "":
 		// fall through to detection
@@ -70,15 +69,27 @@ func Detect(hasPackageLock, hasPnpmLock bool, override string) (Manager, error) 
 	default:
 		return "", fmt.Errorf("unsupported package manager %q (supported: npm, pnpm, yarn, cargo, go, uv)", override)
 	}
+	var found []string
+	if hasPackageLock {
+		found = append(found, NPM.LockfileName())
+	}
+	if hasPnpmLock {
+		found = append(found, PNPM.LockfileName())
+	}
+	if hasYarnLock {
+		found = append(found, YARN.LockfileName())
+	}
 	switch {
-	case hasPackageLock && hasPnpmLock:
-		return "", fmt.Errorf("both package-lock.json and pnpm-lock.yaml exist; choose one with --pm")
+	case len(found) > 1:
+		return "", fmt.Errorf("multiple lockfiles found (%s); choose one with --pm", strings.Join(found, ", "))
 	case hasPackageLock:
 		return NPM, nil
 	case hasPnpmLock:
 		return PNPM, nil
+	case hasYarnLock:
+		return YARN, nil
 	default:
-		return "", fmt.Errorf("no supported lockfile found (package-lock.json or pnpm-lock.yaml); " +
+		return "", fmt.Errorf("no supported lockfile found (package-lock.json, pnpm-lock.yaml, or yarn.lock); " +
 			"a lockfile is required to identify resolved dependency versions")
 	}
 }

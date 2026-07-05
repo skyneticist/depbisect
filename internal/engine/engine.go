@@ -681,10 +681,11 @@ func (e *Engine) readManifest(ctx context.Context, eco manifest.Ecosystem, name,
 // detectManager chooses the package manager. A non-empty override wins;
 // otherwise the manifest present at the target revision selects the ecosystem
 // (Cargo.toml -> cargo, go.mod -> go, pyproject.toml -> uv, package.json ->
-// npm/pnpm by lockfile). More than one manifest is ambiguous and requires --pm.
+// npm/pnpm/yarn by lockfile). More than one manifest is ambiguous and
+// requires --pm.
 func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.Manager, error) {
 	if override != "" {
-		return pm.Detect(false, false, override)
+		return pm.Detect(false, false, false, override)
 	}
 	hasPackageJSON, err := e.Git.FileExists(ctx, toSHA, pm.NPM.ManifestName())
 	if err != nil {
@@ -744,7 +745,11 @@ func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.
 		if err != nil {
 			return "", err
 		}
-		return pm.Detect(hasNpmLock, hasPnpmLock, "")
+		hasYarnLock, err := e.Git.FileExists(ctx, toSHA, pm.YARN.LockfileName())
+		if err != nil {
+			return "", err
+		}
+		return pm.Detect(hasNpmLock, hasPnpmLock, hasYarnLock, "")
 	default:
 		return "", fmt.Errorf("no supported manifest found at %s (package.json, Cargo.toml, go.mod, or pyproject.toml)", shortSHA(toSHA))
 	}
@@ -770,17 +775,18 @@ func (e *Engine) readLockfile(ctx context.Context, eco manifest.Ecosystem, name,
 }
 
 // warnDirty surfaces uncommitted manifest/lockfile edits in the user's working
-// tree, which DepBisect deliberately ignores. For JavaScript both lockfiles are
-// checked regardless of the detected/overridden manager, so forcing --pm on a
-// repo whose actual lockfile differs still surfaces a dirty lockfile. Probing a
-// path that does not exist is harmless: git status reports it as clean.
+// tree, which DepBisect deliberately ignores. For JavaScript all three
+// lockfiles are checked regardless of the detected/overridden manager, so
+// forcing --pm on a repo whose actual lockfile differs still surfaces a dirty
+// lockfile. Probing a path that does not exist is harmless: git status
+// reports it as clean.
 func (e *Engine) warnDirty(ctx context.Context, manager pm.Manager, res *Result) {
 	var paths []string
 	switch manager {
 	case pm.CARGO, pm.GO, pm.UV:
 		paths = []string{manager.ManifestName(), manager.LockfileName()}
 	default:
-		paths = []string{pm.NPM.ManifestName(), pm.NPM.LockfileName(), pm.PNPM.LockfileName()}
+		paths = []string{pm.NPM.ManifestName(), pm.NPM.LockfileName(), pm.PNPM.LockfileName(), pm.YARN.LockfileName()}
 	}
 	for _, path := range paths {
 		dirty, err := e.Git.IsPathDirty(ctx, path)

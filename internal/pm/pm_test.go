@@ -36,16 +36,21 @@ func TestDetect(t *testing.T) {
 		name        string
 		npmLock     bool
 		pnpmLock    bool
+		yarnLock    bool
 		override    string
 		want        Manager
 		wantErrPart string
 	}{
 		{name: "npm lockfile", npmLock: true, want: NPM},
 		{name: "pnpm lockfile", pnpmLock: true, want: PNPM},
-		{name: "both ambiguous", npmLock: true, pnpmLock: true, wantErrPart: "--pm"},
-		{name: "both with override", npmLock: true, pnpmLock: true, override: "pnpm", want: PNPM},
-		{name: "neither", wantErrPart: "lockfile"},
-		{name: "neither with override", override: "npm", want: NPM},
+		{name: "yarn lockfile", yarnLock: true, want: YARN},
+		{name: "npm+pnpm ambiguous", npmLock: true, pnpmLock: true, wantErrPart: "--pm"},
+		{name: "npm+yarn ambiguous", npmLock: true, yarnLock: true, wantErrPart: "--pm"},
+		{name: "pnpm+yarn ambiguous names both", pnpmLock: true, yarnLock: true, wantErrPart: "pnpm-lock.yaml, yarn.lock"},
+		{name: "all three ambiguous", npmLock: true, pnpmLock: true, yarnLock: true, wantErrPart: "--pm"},
+		{name: "ambiguous with override", npmLock: true, pnpmLock: true, yarnLock: true, override: "yarn", want: YARN},
+		{name: "none", wantErrPart: "lockfile"},
+		{name: "none with override", override: "npm", want: NPM},
 		{name: "yarn override", override: "yarn", want: YARN},
 		{name: "cargo override", override: "cargo", want: CARGO},
 		{name: "go override", override: "go", want: GO},
@@ -54,7 +59,7 @@ func TestDetect(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Detect(tc.npmLock, tc.pnpmLock, tc.override)
+			got, err := Detect(tc.npmLock, tc.pnpmLock, tc.yarnLock, tc.override)
 			if tc.wantErrPart != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErrPart) {
 					t.Fatalf("err = %v, want substring %q", err, tc.wantErrPart)
