@@ -57,7 +57,7 @@ CMD ["help"]
 # --- python: bisect pyproject.toml projects with uv --------------------------
 # Matches the interpreter CI tests against (setup-python "3.12"). uv is told
 # to use it rather than downloading a managed interpreter at run time.
-FROM python:3.12-slim AS python
+FROM python:3.14-slim AS python
 ENV UV_PYTHON_PREFERENCE=only-system
 RUN apt-get update \
  && apt-get upgrade -y \
