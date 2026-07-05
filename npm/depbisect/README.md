@@ -100,11 +100,12 @@ $ depbisect run --base origin/main --runs 3 -- npm test
 | ------- | ---------------- | ------------------------------- |
 | npm     | `package.json`   | `package-lock.json` (v1–v3)     |
 | pnpm    | `package.json`   | `pnpm-lock.yaml` (v5/v6/v9)     |
+| yarn    | `package.json`   | `yarn.lock` (classic + Berry)   |
 | cargo   | `Cargo.toml`     | `Cargo.lock`                    |
 | go      | `go.mod`         | `go.sum`                        |
 | uv      | `pyproject.toml` | `uv.lock`                       |
 
-Auto-detected from the manifest, or force one with `--pm <npm|pnpm|cargo|go|uv>`.
+Auto-detected from the manifest, or force one with `--pm <npm|pnpm|yarn|cargo|go|uv>`.
 
 ## Parallel bisection with `--jobs`
 
