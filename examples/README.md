@@ -323,3 +323,30 @@ Expected result: minimal failing set = `acme/breakage 1.0.0 -> 2.0.0`.
 DepBisect bisects the `require` and `require-dev` sections of `composer.json` and
 reads resolved versions from `composer.lock`. Re-run the script any time to reset
 the generated repository.
+
+## Python (pip) demo
+
+`make-demo-pip.sh` generates a pip equivalent at `examples/demo-pip/`.
+Generation needs only `git` and `zip`; bisecting it additionally needs `pip`
+(>= 22.3) and a `python3` on PATH, but **no network**: each package version is
+served from committed wheels in `wheels/` through `--no-index` and
+`--find-links wheels` lines inside `requirements.txt` itself, so installation
+runs entirely offline.
+
+The demo bumps two pinned packages; only `breakage 1.0.0 -> 2.0.0` breaks the
+check (`healthy()` starts returning `False`). Each trial creates a throwaway
+`.venv` in its worktree and installs the candidate `requirements.txt` into it;
+the bare `python check.py` verification command is resolved against that venv
+automatically:
+
+```sh
+./examples/make-demo-pip.sh
+go build ./cmd/depbisect
+./depbisect run --repo examples/demo-pip/app --base HEAD~1 --runs 3 -- python check.py
+```
+
+Expected result: minimal failing set = `breakage 1.0.0 -> 2.0.0`.
+
+DepBisect bisects the requirement lines of `requirements.txt`; pip has no
+separate lockfile, so the exact `==` pins double as the resolved versions in
+the report. Re-run the script any time to reset the generated repository.

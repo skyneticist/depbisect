@@ -70,6 +70,8 @@ jobs:
           go test -run='^$' -fuzz='^FuzzParseUvLock$' -fuzztime=30s ./internal/manifest
           go test -run='^$' -fuzz='^FuzzParseComposerJSON$' -fuzztime=30s ./internal/manifest
           go test -run='^$' -fuzz='^FuzzParseComposerLock$' -fuzztime=30s ./internal/manifest
+          go test -run='^$' -fuzz='^FuzzParseRequirements$' -fuzztime=30s ./internal/manifest
+          go test -run='^$' -fuzz='^FuzzParseRequirementsPins$' -fuzztime=30s ./internal/manifest
 
   test:
     name: ${{ matrix.os }} / Go ${{ matrix.go }}
@@ -662,6 +664,50 @@ jobs:
           path: depbisect-composer*-report.json
           if-no-files-found: ignore
 
+  demo-pip:
+    name: Python (pip) CLI smoke test against example repo
+    # pip and a Python interpreter come from setup-python. The example repo is
+    # fully offline (committed wheels served via --no-index/--find-links lines
+    # inside requirements.txt itself), so no packages are downloaded during the
+    # bisection, matching the other demo jobs. Each trial installs into a
+    # per-worktree .venv, and the bare `python check.py` verify command runs
+    # inside it through the venv bridge.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Generate pip example repo
+        run: ./examples/make-demo-pip.sh
+      - name: Build CLI
+        run: go build ./cmd/depbisect
+      - name: Bisect the pip example repo
+        run: |
+          ./depbisect run \
+            --repo examples/demo-pip/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --report-json depbisect-pip-report.json \
+            -- python check.py
+      - name: Assert the culprit was identified
+        run: |
+          jq -e '.outcome == "minimal-set-found" and .packageManager == "pip" and (.minimalSet | length) == 1 and .minimalSet[0].name == "breakage"' depbisect-pip-report.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: pip-demo-reports-${{ matrix.os }}
+          path: depbisect-pip*-report.json
+          if-no-files-found: ignore
+
   action-smoke:
     name: Local GitHub Action behavior
     runs-on: ubuntu-latest
@@ -769,6 +815,7 @@ jobs:
             check: |
               uv --version
               python3 --version
+              pip --version
           - target: php
             check: |
               php --version
