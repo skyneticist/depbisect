@@ -34,8 +34,8 @@ type Ecosystem interface {
 
 // EcosystemFor returns the Ecosystem for a package manager. The manager keys
 // match the string values of pm.Manager ("npm", "pnpm", "yarn", "cargo", "go",
-// "uv"); keying on the bare string keeps the manifest package decoupled from
-// package pm.
+// "uv", "composer"); keying on the bare string keeps the manifest package
+// decoupled from package pm.
 func EcosystemFor(manager string) (Ecosystem, error) {
 	switch manager {
 	case "npm":
@@ -50,6 +50,8 @@ func EcosystemFor(manager string) (Ecosystem, error) {
 		return goEcosystem{}, nil
 	case "uv":
 		return pyEcosystem{}, nil
+	case "composer":
+		return composerEcosystem{}, nil
 	default:
 		return nil, fmt.Errorf("no manifest handling for package manager %q", manager)
 	}
@@ -162,4 +164,29 @@ func (pyEcosystem) Render(to Parsed, changes []Change, applied map[string]bool) 
 
 func (pyEcosystem) LockfileOnly(old, new Parsed, oldR, newR Resolved) []LockfileChange {
 	return LockfileOnlyPyproject(old.(*PyProject), new.(*PyProject), oldR, newR)
+}
+
+// composerEcosystem handles composer.json manifests for PHP.
+type composerEcosystem struct{}
+
+func (composerEcosystem) Parse(data []byte) (Parsed, error) {
+	c, err := ParseComposerJSON(data)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func (composerEcosystem) ParseLock(data []byte) (Resolved, error) { return ParseComposerLock(data) }
+
+func (composerEcosystem) Diff(old, new Parsed) []Change {
+	return DiffComposer(old.(*ComposerJSON), new.(*ComposerJSON))
+}
+
+func (composerEcosystem) Render(to Parsed, changes []Change, applied map[string]bool) ([]byte, error) {
+	return RenderComposer(to.(*ComposerJSON), changes, applied)
+}
+
+func (composerEcosystem) LockfileOnly(old, new Parsed, oldR, newR Resolved) []LockfileChange {
+	return LockfileOnlyComposer(old.(*ComposerJSON), new.(*ComposerJSON), oldR, newR)
 }
