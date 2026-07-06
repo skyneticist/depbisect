@@ -31,6 +31,11 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 # (rather than COPY --from=<ref>) keeps the pin visible to dependabot.
 FROM ghcr.io/astral-sh/uv:0.11 AS uv-dist
 
+# Composer ships as a PHAR in its official image. Pulling it through a FROM
+# stage (rather than curl-piping the installer) keeps the pin visible to
+# dependabot and avoids a network fetch at build time.
+FROM composer:2 AS composer-dist
+
 # --- go: bisect go.mod projects ---------------------------------------------
 # golang:bookworm is buildpack-deps based, so git, ca-certificates, and a C
 # toolchain (for cgo test builds) are already present.
@@ -65,6 +70,22 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && git config --system --add safe.directory '*'
 COPY --from=uv-dist /uv /uvx /usr/local/bin/
+COPY --from=build /out/depbisect /usr/local/bin/depbisect
+WORKDIR /work
+ENTRYPOINT ["depbisect"]
+CMD ["help"]
+
+# --- php: bisect composer.json projects with composer -----------------------
+# php:cli is Debian (glibc). composer is a PHAR copied from its official image
+# (keeping the pin visible to dependabot); unzip lets composer extract package
+# dist archives without relying on the php zip extension.
+FROM php:8.3-cli-bookworm AS php
+RUN apt-get update \
+ && apt-get upgrade -y \
+ && apt-get install -y --no-install-recommends git ca-certificates unzip \
+ && rm -rf /var/lib/apt/lists/* \
+ && git config --system --add safe.directory '*'
+COPY --from=composer-dist /usr/bin/composer /usr/local/bin/composer
 COPY --from=build /out/depbisect /usr/local/bin/depbisect
 WORKDIR /work
 ENTRYPOINT ["depbisect"]
