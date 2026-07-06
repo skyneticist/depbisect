@@ -95,6 +95,8 @@ fuzz: ## Fuzz each target for $(FUZZTIME) (override: make fuzz FUZZTIME=2m).
 	$(GO) test -run='^$$' -fuzz='^FuzzParseCargoLock$$'   -fuzztime=$(FUZZTIME) ./internal/manifest
 	$(GO) test -run='^$$' -fuzz='^FuzzParsePyproject$$'   -fuzztime=$(FUZZTIME) ./internal/manifest
 	$(GO) test -run='^$$' -fuzz='^FuzzParseUvLock$$'      -fuzztime=$(FUZZTIME) ./internal/manifest
+	$(GO) test -run='^$$' -fuzz='^FuzzParseComposerJSON$$' -fuzztime=$(FUZZTIME) ./internal/manifest
+	$(GO) test -run='^$$' -fuzz='^FuzzParseComposerLock$$' -fuzztime=$(FUZZTIME) ./internal/manifest
 
 .PHONY: bench
 bench: ## Run all benchmarks.
@@ -195,8 +197,13 @@ demo-python: build ## Python (uv): bisect the offline example repo (culprit: bre
 	$(call demo_setup,make-demo-python.sh)
 	$(call demo_run,$(BINARY) run --repo examples/demo-python/app --base HEAD~1 --runs 3 -- uv run -- python check.py)
 
+.PHONY: demo-composer
+demo-composer: build ## PHP (composer): bisect the offline example repo (culprit: breakage).
+	$(call demo_setup,make-demo-composer.sh)
+	$(call demo_run,$(BINARY) run --repo examples/demo-composer/app --base HEAD~1 --runs 3 -- php check.php)
+
 .PHONY: demos
-demos: demo demo-complex demo-jobs demo-swarm demo-yarn demo-cargo demo-go demo-python ## Run every demo above.
+demos: demo demo-complex demo-jobs demo-swarm demo-yarn demo-cargo demo-go demo-python demo-composer ## Run every demo above.
 	@printf '\nAll demos passed.\n'
 
 ##@ Docker

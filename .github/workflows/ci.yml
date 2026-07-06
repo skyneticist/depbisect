@@ -68,6 +68,8 @@ jobs:
           go test -run='^$' -fuzz='^FuzzParseCargoLock$' -fuzztime=30s ./internal/manifest
           go test -run='^$' -fuzz='^FuzzParsePyproject$' -fuzztime=30s ./internal/manifest
           go test -run='^$' -fuzz='^FuzzParseUvLock$' -fuzztime=30s ./internal/manifest
+          go test -run='^$' -fuzz='^FuzzParseComposerJSON$' -fuzztime=30s ./internal/manifest
+          go test -run='^$' -fuzz='^FuzzParseComposerLock$' -fuzztime=30s ./internal/manifest
 
   test:
     name: ${{ matrix.os }} / Go ${{ matrix.go }}
@@ -616,6 +618,50 @@ jobs:
           path: depbisect-python*-report.json
           if-no-files-found: ignore
 
+  demo-composer:
+    name: PHP (composer) CLI smoke test against example repo
+    # PHP and Composer are installed via setup-php. The example repo is fully
+    # offline (committed package directories served through a Composer "path"
+    # repository with Packagist disabled), so no packages are downloaded during
+    # the bisection, matching the cargo, go, and python demo jobs.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          tools: composer
+          coverage: none
+      - name: Generate PHP example repo
+        run: ./examples/make-demo-composer.sh
+      - name: Build CLI
+        run: go build ./cmd/depbisect
+      - name: Bisect the PHP example repo
+        run: |
+          ./depbisect run \
+            --repo examples/demo-composer/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --report-json depbisect-composer-report.json \
+            -- php check.php
+      - name: Assert the culprit was identified
+        run: |
+          jq -e '.outcome == "minimal-set-found" and .packageManager == "composer" and (.minimalSet | length) == 1 and .minimalSet[0].name == "acme/breakage"' depbisect-composer-report.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: composer-demo-reports-${{ matrix.os }}
+          path: depbisect-composer*-report.json
+          if-no-files-found: ignore
+
   action-smoke:
     name: Local GitHub Action behavior
     runs-on: ubuntu-latest
@@ -723,6 +769,10 @@ jobs:
             check: |
               uv --version
               python3 --version
+          - target: php
+            check: |
+              php --version
+              composer --version
     steps:
       - uses: actions/checkout@v7
       - name: Build the ${{ matrix.target }} variant
