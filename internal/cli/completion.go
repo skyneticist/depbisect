@@ -35,7 +35,7 @@ _depbisect() {
                     return
                     ;;
                 --pm)
-                    COMPREPLY=( $(compgen -W "npm pnpm yarn cargo go uv" -- "$cur") )
+                    COMPREPLY=( $(compgen -W "npm pnpm yarn cargo go uv composer" -- "$cur") )
                     return
                     ;;
                 --style)
@@ -108,7 +108,7 @@ _depbisect() {
                 '--run-timeout[timeout per run]:duration:' \
                 '--install-timeout[timeout per dependency install]:duration:' \
                 '--overall-timeout[timeout for the complete bisection]:duration:' \
-                '--pm[package manager]:pm:(npm pnpm yarn cargo go uv)' \
+                '--pm[package manager]:pm:(npm pnpm yarn cargo go uv composer)' \
                 '--report-md[markdown report path]:path:_files' \
                 '--report-json[json report path]:path:_files' \
                 '--no-reports[write no reports]' \

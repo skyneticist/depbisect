@@ -17,7 +17,7 @@
 
 You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 
-`git bisect` walks *commits* — DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies in your manifest (`package.json`, `Cargo.toml`, `go.mod`, or `pyproject.toml`) between two revisions, then narrows them to the exact minimal subset that makes your command fail — and proves no smaller set does. Every install runs in a throwaway git worktree, so it never touches your checkout.
+`git bisect` walks *commits* — DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies in your manifest (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, or `composer.json`) between two revisions, then narrows them to the exact minimal subset that makes your command fail — and proves no smaller set does. Every install runs in a throwaway git worktree, so it never touches your checkout.
 
 ![DepBisect narrowing 12 dependency changes down to the minimal 5-package set that broke the build](https://raw.githubusercontent.com/skyneticist/depbisect/main/docs/assets/gifs/js/demo.gif)
 
@@ -104,8 +104,9 @@ $ depbisect run --base origin/main --runs 3 -- npm test
 | cargo   | `Cargo.toml`     | `Cargo.lock`                    |
 | go      | `go.mod`         | `go.sum`                        |
 | uv      | `pyproject.toml` | `uv.lock`                       |
+| composer | `composer.json` | `composer.lock`                |
 
-Auto-detected from the manifest, or force one with `--pm <npm|pnpm|yarn|cargo|go|uv>`.
+Auto-detected from the manifest, or force one with `--pm <npm|pnpm|yarn|cargo|go|uv|composer>`.
 
 ## Parallel bisection with `--jobs`
 
