@@ -1,8 +1,8 @@
 // Package pm abstracts the supported package managers across ecosystems:
-// npm, pnpm, and yarn for JavaScript, cargo for Rust, go for Go, uv for
-// Python, and composer for PHP.
+// npm, pnpm, and yarn for JavaScript, cargo for Rust, go for Go, uv and pip
+// for Python, and composer for PHP.
 //
-// All seven managers are installed as immutable [Manager] constants. The
+// All eight managers are installed as immutable [Manager] constants. The
 // zero-value Manager ("") is intentionally treated as npm in all switch
 // defaults; callers that need to guard against an uninitialized Manager should
 // call [Manager.Valid] before use.
@@ -14,6 +14,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/skyneticist/depbisect/internal/execx"
@@ -32,20 +34,26 @@ const (
 	GO       Manager = "go"
 	UV       Manager = "uv"
 	COMPOSER Manager = "composer"
+	PIP      Manager = "pip"
 )
+
+// pipVenvDir is the worktree-relative virtual environment pip trials install
+// into. The install step creates it fresh in every trial worktree; the verify
+// command runs against it through the verify package's venv bridge.
+const pipVenvDir = ".venv"
 
 // Valid reports whether m is one of the known package manager constants.
 // The zero value ("") returns false.
 func (m Manager) Valid() bool {
 	switch m {
-	case NPM, PNPM, YARN, CARGO, GO, UV, COMPOSER:
+	case NPM, PNPM, YARN, CARGO, GO, UV, COMPOSER, PIP:
 		return true
 	}
 	return false
 }
 
 // Detect chooses among the JavaScript managers — npm, pnpm, or yarn — from
-// lockfile presence at the target revision. Cargo, Go, UV, and Composer
+// lockfile presence at the target revision. Cargo, Go, UV, Composer, and pip
 // require a non-empty override, since those ecosystems are detected by the
 // engine's manifest-presence logic rather than by this function.
 //
@@ -69,8 +77,10 @@ func Detect(hasPackageLock, hasPnpmLock, hasYarnLock bool, override string) (Man
 		return UV, nil
 	case string(COMPOSER):
 		return COMPOSER, nil
+	case string(PIP):
+		return PIP, nil
 	default:
-		return "", fmt.Errorf("unsupported package manager %q (supported: npm, pnpm, yarn, cargo, go, uv, composer)", override)
+		return "", fmt.Errorf("unsupported package manager %q (supported: npm, pnpm, yarn, cargo, go, uv, composer, pip)", override)
 	}
 	var found []string
 	if hasPackageLock {
@@ -97,7 +107,9 @@ func Detect(hasPackageLock, hasPnpmLock, hasYarnLock bool, override string) (Man
 	}
 }
 
-// LockfileName returns the manager's lockfile filename.
+// LockfileName returns the manager's lockfile filename. pip has no separate
+// lockfile: exact pins in requirements.txt are the resolution, so the manifest
+// name doubles as the lockfile name.
 func (m Manager) LockfileName() string {
 	switch m {
 	case PNPM:
@@ -112,6 +124,8 @@ func (m Manager) LockfileName() string {
 		return "uv.lock"
 	case COMPOSER:
 		return "composer.lock"
+	case PIP:
+		return "requirements.txt"
 	default:
 		return "package-lock.json"
 	}
@@ -129,16 +143,29 @@ func (m Manager) ManifestName() string {
 		return "pyproject.toml"
 	case COMPOSER:
 		return "composer.json"
+	case PIP:
+		return "requirements.txt"
 	default:
 		return "package.json"
 	}
+}
+
+// VenvDir returns the worktree-relative virtual-environment directory the
+// manager's install step creates and the verification command must run
+// against, or "" for managers that do not install into one. Only pip uses a
+// virtual environment; uv projects bridge through `uv run` instead.
+func (m Manager) VenvDir() string {
+	if m == PIP {
+		return pipVenvDir
+	}
+	return ""
 }
 
 // DependencyFiles returns the manifest and lockfile names across every
 // supported manager, deduplicated and in a stable order. These are the paths
 // whose history marks a dependency change, used to suggest a --base revision.
 func DependencyFiles() []string {
-	managers := []Manager{NPM, PNPM, YARN, CARGO, GO, UV, COMPOSER}
+	managers := []Manager{NPM, PNPM, YARN, CARGO, GO, UV, COMPOSER, PIP}
 	seen := make(map[string]bool)
 	var files []string
 	for _, m := range managers {
@@ -206,6 +233,18 @@ func (m Manager) installArgs() []string {
 		// per-trial output quiet; the post-update security audit is suppressed
 		// via COMPOSER_NO_AUDIT (see composerInstallEnv).
 		return []string{"update", "--no-interaction", "--no-progress"}
+	case PIP:
+		// The host pip installs into the trial's freshly created virtual
+		// environment via --python (pip >= 22.3), which re-executes pip under
+		// that interpreter; the venv itself is created --without-pip, so no
+		// ensurepip bootstrap runs per trial (and Debian/Ubuntu systems work
+		// without the python3-venv package). --no-input prevents index
+		// credential prompts from hanging a trial, --disable-pip-version-check
+		// suppresses an irrelevant network check, and the progress bar is
+		// noise in captured output.
+		return []string{"--python", pipVenvPython(), "install",
+			"--requirement", "requirements.txt", "--no-input",
+			"--disable-pip-version-check", "--progress-bar", "off"}
 	default:
 		// --no-audit and --no-fund suppress network calls to the npm advisory
 		// and funding registries that are irrelevant during bisection.
@@ -236,6 +275,43 @@ func goInstallEnv() []string {
 // is an environment setting rather than a flag.
 func yarnInstallEnv() []string {
 	return []string{"YARN_ENABLE_IMMUTABLE_INSTALLS=false"}
+}
+
+// pipVenvPython returns the worktree-relative path of the trial virtual
+// environment's interpreter, which differs between the POSIX (bin/) and
+// Windows (Scripts/) venv layouts.
+func pipVenvPython() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(pipVenvDir, "Scripts", "python.exe")
+	}
+	return filepath.Join(pipVenvDir, "bin", "python")
+}
+
+// pythonCandidates lists interpreter names to try when creating pip's trial
+// virtual environments. Windows installers ship python.exe (python3.exe is
+// usually only the Microsoft Store alias stub), so python is preferred there;
+// elsewhere python3 is the canonical name.
+func pythonCandidates() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"python", "python3"}
+	}
+	return []string{"python3", "python"}
+}
+
+// findPython resolves the host Python interpreter used to create pip's trial
+// virtual environments.
+func (i Installer) findPython() (string, error) {
+	lookPath := i.LookPath
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	for _, name := range pythonCandidates() {
+		if path, err := lookPath(name); err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("pip needs a Python interpreter (%s) on PATH to create trial virtual environments",
+		strings.Join(pythonCandidates(), " or "))
 }
 
 // composerInstallEnv disables Composer's automatic security audit after
@@ -290,6 +366,13 @@ func (i Installer) Version(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("package manager %q not found on PATH: %w", i.Manager, err)
 	}
+	// Version doubles as the pre-flight check, so a missing interpreter for
+	// pip's per-trial virtual environments fails here, before any trial runs.
+	if i.Manager == PIP {
+		if _, err := i.findPython(); err != nil {
+			return "", err
+		}
+	}
 	res, err := i.Runner.Run(ctx, execx.Cmd{
 		Name:              string(i.Manager),
 		Args:              i.Manager.versionArgs(),
@@ -328,7 +411,8 @@ func (i Installer) Version(ctx context.Context) (string, error) {
 //
 // For Go modules, Install injects a merged GOFLAGS that ensures -mod=mod
 // without discarding any other flags the user already has in GOFLAGS. For
-// yarn, it disables Berry's automatic immutable-installs mode.
+// yarn, it disables Berry's automatic immutable-installs mode. For pip, it
+// first creates a per-worktree virtual environment that the install targets.
 func (i Installer) Install(ctx context.Context, dir string, stream io.Writer) (execx.Result, error) {
 	if dir == "" {
 		return execx.Result{}, fmt.Errorf("install %s: target directory must not be empty", i.Manager)
@@ -348,6 +432,33 @@ func (i Installer) Install(ctx context.Context, dir string, stream io.Writer) (e
 		extraEnv = yarnInstallEnv()
 	case COMPOSER:
 		extraEnv = composerInstallEnv()
+	case PIP:
+		// pip installs into a per-worktree virtual environment so parallel
+		// trial lanes never mutate a shared interpreter. The venv must exist
+		// before pip targets it; a creation failure is environmental (broken
+		// or missing venv module), not a property of the candidate, so unlike
+		// the install itself it is returned as an error to fail the run
+		// immediately rather than skipping every trial as unresolved.
+		python, err := i.findPython()
+		if err != nil {
+			return execx.Result{}, fmt.Errorf("install %s: %w", i.Manager, err)
+		}
+		res, err := i.Runner.Run(ctx, execx.Cmd{
+			Dir:               dir,
+			Name:              python,
+			Args:              []string{"-m", "venv", "--without-pip", pipVenvDir},
+			AllowTrustedBatch: true,
+			Stream:            stream,
+		})
+		if err != nil {
+			return res, fmt.Errorf("install %s: create trial virtual environment: %w", i.Manager, err)
+		}
+		if res.ExitCode != 0 {
+			// venv reports some failures (e.g. missing ensurepip) on stdout.
+			detail := execx.FirstLineOr(res.Stderr, execx.FirstLineOr(res.Stdout, "no output"))
+			return res, fmt.Errorf("install %s: create trial virtual environment (%s -m venv %s): %s",
+				i.Manager, python, pipVenvDir, detail)
+		}
 	}
 	return i.Runner.Run(ctx, execx.Cmd{
 		Dir:               dir,
