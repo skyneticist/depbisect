@@ -34,7 +34,7 @@ inputs:
     required: false
     default: "1"
   pm:
-    description: Package manager override (npm, pnpm, yarn, cargo, go, or uv). Default autodetect.
+    description: Package manager override (npm, pnpm, yarn, cargo, go, uv, composer, or pip). Default autodetect.
     required: false
     default: ""
   run-timeout:
