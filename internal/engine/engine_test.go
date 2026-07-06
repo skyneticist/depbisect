@@ -191,6 +191,19 @@ func readDeps(t testing.TB, dir string) map[string]string {
 		}
 		return deps
 	}
+	if data, err := os.ReadFile(filepath.Join(dir, "composer.json")); err == nil {
+		c, err := manifest.ParseComposerJSON(data)
+		if err != nil {
+			t.Fatalf("parse candidate composer.json: %v", err)
+		}
+		deps := map[string]string{}
+		for _, sec := range c.Sections {
+			for k, v := range sec {
+				deps[k] = v
+			}
+		}
+		return deps
+	}
 	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
 	if err != nil {
 		t.Fatalf("read candidate manifest: %v", err)
@@ -711,6 +724,54 @@ func TestRunFindsSingleCulpritPython(t *testing.T) {
 	}
 	if res.Minimal[0].OldResolved != "3.0.0" || res.Minimal[0].NewResolved != "3.2.0" {
 		t.Errorf("resolved versions not annotated from uv.lock: %+v", res.Minimal[0])
+	}
+}
+
+func composerLock(alpha, beta, gamma string) string {
+	return `{
+  "packages": [
+    {"name": "acme/alpha", "version": "` + alpha + `"},
+    {"name": "acme/beta", "version": "` + beta + `"},
+    {"name": "acme/gamma", "version": "` + gamma + `"}
+  ],
+  "packages-dev": []
+}`
+}
+
+func threeChangeComposerRepo() *fakeGit {
+	const baseJSON = `{"name":"acme/app","require":{"acme/alpha":"^1.0.0","acme/beta":"^3.0.0","acme/gamma":"^5.0.0"}}`
+	const headJSON = `{"name":"acme/app","require":{"acme/alpha":"^1.1.0","acme/beta":"^3.2.0","acme/gamma":"^5.5.0"}}`
+	return &fakeGit{
+		revs: map[string]string{"base": "sha-base", "HEAD": "sha-head"},
+		files: map[string]map[string]string{
+			"sha-base": {"composer.json": baseJSON, "composer.lock": composerLock("1.0.0", "3.0.0", "5.0.0")},
+			"sha-head": {"composer.json": headJSON, "composer.lock": composerLock("1.1.0", "3.2.0", "5.5.0")},
+		},
+	}
+}
+
+// TestRunFindsSingleCulpritComposer exercises the whole engine over a PHP repo:
+// composer.json auto-detection, require diff/render, and composer.lock
+// annotation.
+func TestRunFindsSingleCulpritComposer(t *testing.T) {
+	env := newEnv(t, threeChangeComposerRepo(), func(deps map[string]string) bool {
+		return deps["acme/beta"] == "^3.2.0"
+	}, 3)
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeMinimalFound {
+		t.Fatalf("outcome = %q, diagnostics %v", res.Outcome, res.Diagnostics)
+	}
+	if res.PackageManager != "composer" {
+		t.Errorf("pm = %q, want composer", res.PackageManager)
+	}
+	if got := minimalNames(res); ids(got) != "acme/beta" {
+		t.Errorf("minimal = %v, want [acme/beta]", got)
+	}
+	if res.Minimal[0].OldResolved != "3.0.0" || res.Minimal[0].NewResolved != "3.2.0" {
+		t.Errorf("resolved versions not annotated from composer.lock: %+v", res.Minimal[0])
 	}
 }
 

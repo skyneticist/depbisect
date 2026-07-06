@@ -30,7 +30,7 @@ jobs:
         # One image per ecosystem (Dockerfile runtime stages). The js variant
         # keeps the unsuffixed version tags and :latest it has always had; the
         # others get a version suffix plus a moving ecosystem alias
-        # (ghcr.io/…/depbisect:go, :rust, :python).
+        # (ghcr.io/…/depbisect:go, :rust, :python, :php).
         include:
           - target: js
             suffix: ""
@@ -44,6 +44,9 @@ jobs:
           - target: python
             suffix: "-python"
             alias: python
+          - target: php
+            suffix: "-php"
+            alias: php
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v4
@@ -70,7 +73,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=${{ steps.ver.outputs.version }}${{ matrix.suffix }}
-            # Only tag pushes move the alias (latest/go/rust/python); a
+            # Only tag pushes move the alias (latest/go/rust/python/php); a
             # workflow_dispatch republish of an older version must not
             # re-point it backwards.
             type=raw,value=${{ matrix.alias }},enable=${{ github.event_name == 'push' }}

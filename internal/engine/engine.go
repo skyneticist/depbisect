@@ -680,9 +680,9 @@ func (e *Engine) readManifest(ctx context.Context, eco manifest.Ecosystem, name,
 
 // detectManager chooses the package manager. A non-empty override wins;
 // otherwise the manifest present at the target revision selects the ecosystem
-// (Cargo.toml -> cargo, go.mod -> go, pyproject.toml -> uv, package.json ->
-// npm/pnpm/yarn by lockfile). More than one manifest is ambiguous and
-// requires --pm.
+// (Cargo.toml -> cargo, go.mod -> go, pyproject.toml -> uv, composer.json ->
+// composer, package.json -> npm/pnpm/yarn by lockfile). More than one
+// manifest is ambiguous and requires --pm.
 func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.Manager, error) {
 	if override != "" {
 		return pm.Detect(false, false, false, override)
@@ -703,6 +703,10 @@ func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.
 	if err != nil {
 		return "", err
 	}
+	hasComposerJSON, err := e.Git.FileExists(ctx, toSHA, pm.COMPOSER.ManifestName())
+	if err != nil {
+		return "", err
+	}
 	var found []string
 	if hasPackageJSON {
 		found = append(found, "package.json")
@@ -715,6 +719,9 @@ func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.
 	}
 	if hasPyproject {
 		found = append(found, "pyproject.toml")
+	}
+	if hasComposerJSON {
+		found = append(found, "composer.json")
 	}
 	if len(found) > 1 {
 		return "", fmt.Errorf("multiple manifests found (%s); choose one with --pm", strings.Join(found, ", "))
@@ -736,6 +743,8 @@ func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.
 			return "", fmt.Errorf("pyproject.toml found but no uv.lock at %s; only uv is supported for Python so far (pass --pm uv if this is a uv project, or generate uv.lock with `uv lock`)", shortSHA(toSHA))
 		}
 		return pm.UV, nil
+	case hasComposerJSON:
+		return pm.COMPOSER, nil
 	case hasPackageJSON:
 		hasNpmLock, err := e.Git.FileExists(ctx, toSHA, pm.NPM.LockfileName())
 		if err != nil {
@@ -751,7 +760,7 @@ func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.
 		}
 		return pm.Detect(hasNpmLock, hasPnpmLock, hasYarnLock, "")
 	default:
-		return "", fmt.Errorf("no supported manifest found at %s (package.json, Cargo.toml, go.mod, or pyproject.toml)", shortSHA(toSHA))
+		return "", fmt.Errorf("no supported manifest found at %s (package.json, Cargo.toml, go.mod, pyproject.toml, or composer.json)", shortSHA(toSHA))
 	}
 }
 
@@ -783,7 +792,7 @@ func (e *Engine) readLockfile(ctx context.Context, eco manifest.Ecosystem, name,
 func (e *Engine) warnDirty(ctx context.Context, manager pm.Manager, res *Result) {
 	var paths []string
 	switch manager {
-	case pm.CARGO, pm.GO, pm.UV:
+	case pm.CARGO, pm.GO, pm.UV, pm.COMPOSER:
 		paths = []string{manager.ManifestName(), manager.LockfileName()}
 	default:
 		paths = []string{pm.NPM.ManifestName(), pm.NPM.LockfileName(), pm.PNPM.LockfileName(), pm.YARN.LockfileName()}

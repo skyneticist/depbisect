@@ -295,3 +295,31 @@ Expected result: minimal failing set = `breakage 1.0.0 -> 2.0.0`.
 DepBisect bisects the PEP 621 `[project.dependencies]` array in `pyproject.toml`
 and reads resolved versions from `uv.lock`. Re-run the script any time to reset
 the generated repository.
+
+## PHP (composer) demo
+
+`make-demo-composer.sh` generates a PHP equivalent at `examples/demo-composer/`.
+It needs `git`, `composer`, and `php` but **no network**: each package version
+is a directory under `packages/` and served through a Composer
+[path repository](https://getcomposer.org/doc/05-repositories.md#path) whose
+`packages/*` glob exposes every version, with the default Packagist repository
+disabled (`{ "packagist.org": false }`), so both resolution and installation run
+entirely offline. A path repository (rather than an artifact one) avoids needing
+a zip archiver to build the demo or PHP's zip extension to install it.
+
+The demo bumps two packages; only `acme/breakage 1.0.0 -> 2.0.0` breaks the
+check (`Health::ok()` starts returning `false`). Candidates install with
+`composer update`, which re-resolves `composer.json` against the artifact
+repository and regenerates `vendor/`, then the check runs under `php`:
+
+```sh
+./examples/make-demo-composer.sh
+go build ./cmd/depbisect
+./depbisect run --repo examples/demo-composer/app --base HEAD~1 --runs 3 -- php check.php
+```
+
+Expected result: minimal failing set = `acme/breakage 1.0.0 -> 2.0.0`.
+
+DepBisect bisects the `require` and `require-dev` sections of `composer.json` and
+reads resolved versions from `composer.lock`. Re-run the script any time to reset
+the generated repository.

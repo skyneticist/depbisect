@@ -191,6 +191,59 @@ func FuzzParsePyproject(f *testing.F) {
 	})
 }
 
+// FuzzParseComposerJSON checks that parsing never panics and that any
+// composer.json which parses cleanly round-trips: rendering it with no changes
+// applied and re-parsing must yield an identical set of dependency
+// declarations.
+func FuzzParseComposerJSON(f *testing.F) {
+	f.Add([]byte(`{"name":"a/b","require":{"monolog/monolog":"^2.9"},"require-dev":{"phpunit/phpunit":"^9"}}`))
+	f.Add([]byte(`{"require":{"php":">=8.1","ext-json":"*"}}`))
+	f.Add([]byte(`{}`))
+	f.Add([]byte(`{"name":123,"require":null}`))
+	f.Add([]byte(`not json`))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		c, err := ParseComposerJSON(data)
+		if err != nil {
+			return // rejecting malformed input is fine; it must just not panic.
+		}
+		rendered, err := RenderComposer(c, nil, nil)
+		if err != nil {
+			t.Fatalf("RenderComposer after successful parse: %v\ninput:\n%s", err, data)
+		}
+		c2, err := ParseComposerJSON(rendered)
+		if err != nil {
+			t.Fatalf("re-parse of rendered manifest: %v\nrendered:\n%s", err, rendered)
+		}
+		if diff := DiffComposer(c, c2); len(diff) != 0 {
+			t.Fatalf("round-trip changed dependencies: %v\nrendered:\n%s", diff, rendered)
+		}
+	})
+}
+
+// FuzzParseComposerLock checks that composer.lock parsing never panics and is
+// deterministic: parsing identical bytes twice yields an identical result.
+func FuzzParseComposerLock(f *testing.F) {
+	f.Add([]byte(`{"packages":[{"name":"a/b","version":"1.0.0"}]}`))
+	f.Add([]byte(`{"packages":[{"name":"a/b","version":"v2.0.0"}],"packages-dev":[{"name":"c/d","version":"3.0"}]}`))
+	f.Add([]byte(`{"packages":[]}`))
+	f.Add([]byte(`broken`))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		first, err := ParseComposerLock(data)
+		if err != nil {
+			return
+		}
+		second, err := ParseComposerLock(data)
+		if err != nil {
+			t.Fatalf("non-deterministic error on identical input: %v", err)
+		}
+		if !reflect.DeepEqual(first, second) {
+			t.Fatalf("non-deterministic parse: %v vs %v", first, second)
+		}
+	})
+}
+
 // FuzzParseUvLock checks that uv.lock parsing never panics and is deterministic:
 // parsing identical bytes twice yields an identical result.
 func FuzzParseUvLock(f *testing.F) {
