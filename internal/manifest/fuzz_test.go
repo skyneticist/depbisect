@@ -244,6 +244,62 @@ func FuzzParseComposerLock(f *testing.F) {
 	})
 }
 
+// FuzzParseRequirements checks that parsing never panics and that any
+// requirements.txt which parses cleanly round-trips: rendering it with no
+// changes applied and re-parsing must yield an identical set of dependency
+// declarations. This exercises comment stripping, backslash continuations, and
+// the verbatim line renderer against arbitrary input.
+func FuzzParseRequirements(f *testing.F) {
+	f.Add([]byte("requests>=2.28\nFlask[async]==2.0 ; python_version >= '3.8'\n"))
+	f.Add([]byte("# comment\n--no-index\n--find-links wheels\na==1.0\n"))
+	f.Add([]byte("multi==1.0 \\\n    ; python_version >= '3.9'\n-r other.txt\n"))
+	f.Add([]byte("pkg @ https://example.com/p.whl\n./local/p.whl\nbare\n"))
+	f.Add([]byte("a==1.0\r\nb==2.0\r\n"))
+	f.Add([]byte("trailing==1.0 \\"))
+	f.Add([]byte(""))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		r, err := ParseRequirements(data)
+		if err != nil {
+			return // rejecting hash-pinned input is fine; it must just not panic.
+		}
+		rendered, err := RenderRequirements(r, nil, nil)
+		if err != nil {
+			t.Fatalf("RenderRequirements after successful parse: %v\ninput:\n%s", err, data)
+		}
+		r2, err := ParseRequirements(rendered)
+		if err != nil {
+			t.Fatalf("re-parse of rendered manifest: %v\nrendered:\n%s", err, rendered)
+		}
+		if diff := DiffRequirements(r, r2); len(diff) != 0 {
+			t.Fatalf("round-trip changed dependencies: %v\nrendered:\n%s", diff, rendered)
+		}
+	})
+}
+
+// FuzzParseRequirementsPins checks that pin extraction never panics and is
+// deterministic: parsing identical bytes twice yields an identical result.
+func FuzzParseRequirementsPins(f *testing.F) {
+	f.Add([]byte("a==1.0\nb>=2.0\nc===3.0\n"))
+	f.Add([]byte("d[extra]==1.0 ; python_version >= '3.8'\ne==1.*\n"))
+	f.Add([]byte("--no-index\n# pinned\nf == 2.0\n"))
+	f.Add([]byte(""))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		first, err := ParseRequirementsPins(data)
+		if err != nil {
+			return
+		}
+		second, err := ParseRequirementsPins(data)
+		if err != nil {
+			t.Fatalf("non-deterministic error on identical input: %v", err)
+		}
+		if !reflect.DeepEqual(first, second) {
+			t.Fatalf("non-deterministic parse: %v vs %v", first, second)
+		}
+	})
+}
+
 // FuzzParseUvLock checks that uv.lock parsing never panics and is deterministic:
 // parsing identical bytes twice yields an identical result.
 func FuzzParseUvLock(f *testing.F) {
