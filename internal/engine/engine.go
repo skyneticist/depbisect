@@ -193,8 +193,11 @@ type Engine struct {
 	Git GitClient
 	// NewInstaller builds an installer once the package manager is known.
 	NewInstaller func(pm.Manager) Installer
-	Verifier     Verifier
-	Progress     Progress
+	// NewVerifier builds a verifier once the package manager is known, so
+	// manager-specific execution bridges (pip's per-worktree virtual
+	// environment) can be configured without the engine knowing the details.
+	NewVerifier func(pm.Manager) Verifier
+	Progress    Progress
 	// Now and MkdirTemp are injectable for tests; nil selects the real
 	// clock and os.MkdirTemp("", "depbisect-").
 	Now       func() time.Time
@@ -455,7 +458,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	ex := &executor{
 		git:            e.Git,
 		installer:      installer,
-		verifier:       e.Verifier,
+		verifier:       e.NewVerifier(manager),
 		progress:       progress,
 		now:            now,
 		toSHA:          toSHA,
@@ -680,9 +683,11 @@ func (e *Engine) readManifest(ctx context.Context, eco manifest.Ecosystem, name,
 
 // detectManager chooses the package manager. A non-empty override wins;
 // otherwise the manifest present at the target revision selects the ecosystem
-// (Cargo.toml -> cargo, go.mod -> go, pyproject.toml -> uv, composer.json ->
-// composer, package.json -> npm/pnpm/yarn by lockfile). More than one
-// manifest is ambiguous and requires --pm.
+// (Cargo.toml -> cargo, go.mod -> go, pyproject.toml -> uv or pip,
+// requirements.txt -> pip, composer.json -> composer, package.json ->
+// npm/pnpm/yarn by lockfile). More than one manifest is ambiguous and
+// requires --pm, except that pyproject.toml and requirements.txt count as one
+// Python manifest because they routinely coexist in a single project.
 func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.Manager, error) {
 	if override != "" {
 		return pm.Detect(false, false, false, override)
@@ -707,6 +712,10 @@ func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.
 	if err != nil {
 		return "", err
 	}
+	hasRequirements, err := e.Git.FileExists(ctx, toSHA, pm.PIP.ManifestName())
+	if err != nil {
+		return "", err
+	}
 	var found []string
 	if hasPackageJSON {
 		found = append(found, "package.json")
@@ -717,8 +726,13 @@ func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.
 	if hasGoMod {
 		found = append(found, "go.mod")
 	}
-	if hasPyproject {
+	// pyproject.toml and requirements.txt contribute one Python entry: they
+	// commonly coexist, and which manager handles the project is decided below.
+	switch {
+	case hasPyproject:
 		found = append(found, "pyproject.toml")
+	case hasRequirements:
+		found = append(found, "requirements.txt")
 	}
 	if hasComposerJSON {
 		found = append(found, "composer.json")
@@ -732,17 +746,23 @@ func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.
 	case hasGoMod:
 		return pm.GO, nil
 	case hasPyproject:
-		// pyproject.toml is shared by every Python tool; only uv is supported so
-		// far, distinguished by its uv.lock. Other tools (Poetry, PDM) need --pm
-		// once they are added.
+		// pyproject.toml is shared by every Python tool; uv is identified by
+		// its uv.lock, which wins even when a requirements.txt (often an
+		// export) also exists. Without one, a requirements.txt selects pip.
+		// Other tools (Poetry, PDM) need --pm once they are added.
 		hasUvLock, err := e.Git.FileExists(ctx, toSHA, pm.UV.LockfileName())
 		if err != nil {
 			return "", err
 		}
-		if !hasUvLock {
-			return "", fmt.Errorf("pyproject.toml found but no uv.lock at %s; only uv is supported for Python so far (pass --pm uv if this is a uv project, or generate uv.lock with `uv lock`)", shortSHA(toSHA))
+		if hasUvLock {
+			return pm.UV, nil
 		}
-		return pm.UV, nil
+		if hasRequirements {
+			return pm.PIP, nil
+		}
+		return "", fmt.Errorf("pyproject.toml found but no uv.lock or requirements.txt at %s; only uv and pip are supported for Python so far (generate uv.lock with `uv lock`, or pass --pm explicitly)", shortSHA(toSHA))
+	case hasRequirements:
+		return pm.PIP, nil
 	case hasComposerJSON:
 		return pm.COMPOSER, nil
 	case hasPackageJSON:
@@ -760,7 +780,7 @@ func (e *Engine) detectManager(ctx context.Context, toSHA, override string) (pm.
 		}
 		return pm.Detect(hasNpmLock, hasPnpmLock, hasYarnLock, "")
 	default:
-		return "", fmt.Errorf("no supported manifest found at %s (package.json, Cargo.toml, go.mod, pyproject.toml, or composer.json)", shortSHA(toSHA))
+		return "", fmt.Errorf("no supported manifest found at %s (package.json, Cargo.toml, go.mod, pyproject.toml, composer.json, or requirements.txt)", shortSHA(toSHA))
 	}
 }
 
@@ -792,8 +812,12 @@ func (e *Engine) readLockfile(ctx context.Context, eco manifest.Ecosystem, name,
 func (e *Engine) warnDirty(ctx context.Context, manager pm.Manager, res *Result) {
 	var paths []string
 	switch manager {
-	case pm.CARGO, pm.GO, pm.UV, pm.COMPOSER:
+	case pm.CARGO, pm.GO, pm.UV, pm.COMPOSER, pm.PIP:
 		paths = []string{manager.ManifestName(), manager.LockfileName()}
+		if paths[1] == paths[0] {
+			// pip: requirements.txt is manifest and lockfile at once.
+			paths = paths[:1]
+		}
 	default:
 		paths = []string{pm.NPM.ManifestName(), pm.NPM.LockfileName(), pm.PNPM.LockfileName(), pm.YARN.LockfileName()}
 	}

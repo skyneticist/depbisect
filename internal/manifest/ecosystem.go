@@ -34,8 +34,8 @@ type Ecosystem interface {
 
 // EcosystemFor returns the Ecosystem for a package manager. The manager keys
 // match the string values of pm.Manager ("npm", "pnpm", "yarn", "cargo", "go",
-// "uv", "composer"); keying on the bare string keeps the manifest package
-// decoupled from package pm.
+// "uv", "composer", "pip"); keying on the bare string keeps the manifest
+// package decoupled from package pm.
 func EcosystemFor(manager string) (Ecosystem, error) {
 	switch manager {
 	case "npm":
@@ -52,6 +52,8 @@ func EcosystemFor(manager string) (Ecosystem, error) {
 		return pyEcosystem{}, nil
 	case "composer":
 		return composerEcosystem{}, nil
+	case "pip":
+		return pipEcosystem{}, nil
 	default:
 		return nil, fmt.Errorf("no manifest handling for package manager %q", manager)
 	}
@@ -164,6 +166,33 @@ func (pyEcosystem) Render(to Parsed, changes []Change, applied map[string]bool) 
 
 func (pyEcosystem) LockfileOnly(old, new Parsed, oldR, newR Resolved) []LockfileChange {
 	return LockfileOnlyPyproject(old.(*PyProject), new.(*PyProject), oldR, newR)
+}
+
+// pipEcosystem handles requirements.txt manifests for the pip package
+// manager. requirements.txt is also its own "lockfile": exact pins stand in
+// for resolved versions, so ParseLock reads the same bytes as Parse.
+type pipEcosystem struct{}
+
+func (pipEcosystem) Parse(data []byte) (Parsed, error) {
+	r, err := ParseRequirements(data)
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+func (pipEcosystem) ParseLock(data []byte) (Resolved, error) { return ParseRequirementsPins(data) }
+
+func (pipEcosystem) Diff(old, new Parsed) []Change {
+	return DiffRequirements(old.(*Requirements), new.(*Requirements))
+}
+
+func (pipEcosystem) Render(to Parsed, changes []Change, applied map[string]bool) ([]byte, error) {
+	return RenderRequirements(to.(*Requirements), changes, applied)
+}
+
+func (pipEcosystem) LockfileOnly(old, new Parsed, oldR, newR Resolved) []LockfileChange {
+	return LockfileOnlyRequirements(old.(*Requirements), new.(*Requirements), oldR, newR)
 }
 
 // composerEcosystem handles composer.json manifests for PHP.
