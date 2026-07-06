@@ -1,8 +1,8 @@
 // Package pm abstracts the supported package managers across ecosystems:
-// npm, pnpm, and yarn for JavaScript, cargo for Rust, go for Go, and uv for
-// Python.
+// npm, pnpm, and yarn for JavaScript, cargo for Rust, go for Go, uv for
+// Python, and composer for PHP.
 //
-// All six managers are installed as immutable [Manager] constants. The
+// All seven managers are installed as immutable [Manager] constants. The
 // zero-value Manager ("") is intentionally treated as npm in all switch
 // defaults; callers that need to guard against an uninitialized Manager should
 // call [Manager.Valid] before use.
@@ -25,28 +25,29 @@ import (
 type Manager string
 
 const (
-	NPM   Manager = "npm"
-	PNPM  Manager = "pnpm"
-	YARN  Manager = "yarn"
-	CARGO Manager = "cargo"
-	GO    Manager = "go"
-	UV    Manager = "uv"
+	NPM      Manager = "npm"
+	PNPM     Manager = "pnpm"
+	YARN     Manager = "yarn"
+	CARGO    Manager = "cargo"
+	GO       Manager = "go"
+	UV       Manager = "uv"
+	COMPOSER Manager = "composer"
 )
 
 // Valid reports whether m is one of the known package manager constants.
 // The zero value ("") returns false.
 func (m Manager) Valid() bool {
 	switch m {
-	case NPM, PNPM, YARN, CARGO, GO, UV:
+	case NPM, PNPM, YARN, CARGO, GO, UV, COMPOSER:
 		return true
 	}
 	return false
 }
 
 // Detect chooses among the JavaScript managers — npm, pnpm, or yarn — from
-// lockfile presence at the target revision. Cargo, Go, and UV require a
-// non-empty override, since those ecosystems are detected by the engine's
-// manifest-presence logic rather than by this function.
+// lockfile presence at the target revision. Cargo, Go, UV, and Composer
+// require a non-empty override, since those ecosystems are detected by the
+// engine's manifest-presence logic rather than by this function.
 //
 // A non-empty override always wins. When override is empty, exactly one of
 // the three JS-ecosystem lockfiles must be present.
@@ -66,8 +67,10 @@ func Detect(hasPackageLock, hasPnpmLock, hasYarnLock bool, override string) (Man
 		return GO, nil
 	case string(UV):
 		return UV, nil
+	case string(COMPOSER):
+		return COMPOSER, nil
 	default:
-		return "", fmt.Errorf("unsupported package manager %q (supported: npm, pnpm, yarn, cargo, go, uv)", override)
+		return "", fmt.Errorf("unsupported package manager %q (supported: npm, pnpm, yarn, cargo, go, uv, composer)", override)
 	}
 	var found []string
 	if hasPackageLock {
@@ -107,6 +110,8 @@ func (m Manager) LockfileName() string {
 		return "go.sum"
 	case UV:
 		return "uv.lock"
+	case COMPOSER:
+		return "composer.lock"
 	default:
 		return "package-lock.json"
 	}
@@ -122,6 +127,8 @@ func (m Manager) ManifestName() string {
 		return "go.mod"
 	case UV:
 		return "pyproject.toml"
+	case COMPOSER:
+		return "composer.json"
 	default:
 		return "package.json"
 	}
@@ -131,7 +138,7 @@ func (m Manager) ManifestName() string {
 // supported manager, deduplicated and in a stable order. These are the paths
 // whose history marks a dependency change, used to suggest a --base revision.
 func DependencyFiles() []string {
-	managers := []Manager{NPM, PNPM, YARN, CARGO, GO, UV}
+	managers := []Manager{NPM, PNPM, YARN, CARGO, GO, UV, COMPOSER}
 	seen := make(map[string]bool)
 	var files []string
 	for _, m := range managers {
@@ -190,6 +197,15 @@ func (m Manager) installArgs() []string {
 		// which should invoke `uv run` (e.g. `uv run -- pytest`) so it executes
 		// against the freshly resolved lock.
 		return []string{"lock"}
+	case COMPOSER:
+		// `composer install` reuses composer.lock verbatim — when the manifest
+		// disagrees with the lock it only warns and installs the locked (head)
+		// versions anyway, silently ignoring the candidate's reverts. `composer
+		// update` re-resolves from composer.json, rewrites composer.lock, and
+		// installs vendor/, which is what candidates need. --no-progress keeps
+		// per-trial output quiet; the post-update security audit is suppressed
+		// via COMPOSER_NO_AUDIT (see composerInstallEnv).
+		return []string{"update", "--no-interaction", "--no-progress"}
 	default:
 		// --no-audit and --no-fund suppress network calls to the npm advisory
 		// and funding registries that are irrelevant during bisection.
@@ -220,6 +236,15 @@ func goInstallEnv() []string {
 // is an environment setting rather than a flag.
 func yarnInstallEnv() []string {
 	return []string{"YARN_ENABLE_IMMUTABLE_INSTALLS=false"}
+}
+
+// composerInstallEnv disables Composer's automatic security audit after
+// update (Composer >= 2.4), which queries the repository's advisory API and is
+// irrelevant during bisection. An environment variable is used rather than the
+// --no-audit flag because Composer versions before 2.4 reject the unknown flag
+// but harmlessly ignore the unknown variable.
+func composerInstallEnv() []string {
+	return []string{"COMPOSER_NO_AUDIT=1"}
 }
 
 // mergeModFlag removes any existing -mod=… token from flags and appends
@@ -284,9 +309,11 @@ func (i Installer) Version(ctx context.Context) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("inspect package manager %q version: command produced no output", i.Manager)
 	}
-	// cargo --version already prints "cargo x.y.z"; npm and pnpm print only the
-	// bare number, so the manager name is prefixed only when not already present.
-	if strings.HasPrefix(version, string(i.Manager)) {
+	// cargo --version already prints "cargo x.y.z" and composer prints
+	// "Composer version x.y.z" (capitalized); npm and pnpm print only the bare
+	// number. The manager name is prefixed only when not already present,
+	// compared case-insensitively for composer's capital C.
+	if n := len(i.Manager); len(version) >= n && strings.EqualFold(version[:n], string(i.Manager)) {
 		return version, nil
 	}
 	return fmt.Sprintf("%s %s", i.Manager, version), nil
@@ -319,6 +346,8 @@ func (i Installer) Install(ctx context.Context, dir string, stream io.Writer) (e
 		extraEnv = goInstallEnv()
 	case YARN:
 		extraEnv = yarnInstallEnv()
+	case COMPOSER:
+		extraEnv = composerInstallEnv()
 	}
 	return i.Runner.Run(ctx, execx.Cmd{
 		Dir:               dir,

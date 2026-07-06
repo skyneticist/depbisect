@@ -17,7 +17,7 @@ import (
 )
 
 func TestManagerValid(t *testing.T) {
-	valid := []Manager{NPM, PNPM, YARN, CARGO, GO, UV}
+	valid := []Manager{NPM, PNPM, YARN, CARGO, GO, UV, COMPOSER}
 	for _, m := range valid {
 		if !m.Valid() {
 			t.Errorf("Manager(%q).Valid() = false, want true", m)
@@ -55,6 +55,7 @@ func TestDetect(t *testing.T) {
 		{name: "cargo override", override: "cargo", want: CARGO},
 		{name: "go override", override: "go", want: GO},
 		{name: "uv override", override: "uv", want: UV},
+		{name: "composer override", override: "composer", want: COMPOSER},
 		{name: "bad override", override: "bun", wantErrPart: "bun"},
 	}
 	for _, tc := range cases {
@@ -79,7 +80,8 @@ func TestDetect(t *testing.T) {
 func TestLockfileNames(t *testing.T) {
 	if NPM.LockfileName() != "package-lock.json" || PNPM.LockfileName() != "pnpm-lock.yaml" ||
 		YARN.LockfileName() != "yarn.lock" || CARGO.LockfileName() != "Cargo.lock" ||
-		GO.LockfileName() != "go.sum" || UV.LockfileName() != "uv.lock" {
+		GO.LockfileName() != "go.sum" || UV.LockfileName() != "uv.lock" ||
+		COMPOSER.LockfileName() != "composer.lock" {
 		t.Error("wrong lockfile names")
 	}
 }
@@ -87,7 +89,8 @@ func TestLockfileNames(t *testing.T) {
 func TestManifestNames(t *testing.T) {
 	if NPM.ManifestName() != "package.json" || PNPM.ManifestName() != "package.json" ||
 		YARN.ManifestName() != "package.json" || CARGO.ManifestName() != "Cargo.toml" ||
-		GO.ManifestName() != "go.mod" || UV.ManifestName() != "pyproject.toml" {
+		GO.ManifestName() != "go.mod" || UV.ManifestName() != "pyproject.toml" ||
+		COMPOSER.ManifestName() != "composer.json" {
 		t.Error("wrong manifest names")
 	}
 }
@@ -197,6 +200,28 @@ func TestInstallInvocation(t *testing.T) {
 		}
 		if !c.AllowTrustedBatch {
 			t.Error("uv invocation must set AllowTrustedBatch for Windows batch shims")
+		}
+	})
+
+	t.Run("composer", func(t *testing.T) {
+		dir := t.TempDir()
+		fake := execx.NewFake()
+		if _, err := (Installer{Runner: fake, Manager: COMPOSER}).Install(context.Background(), dir, nil); err != nil {
+			t.Fatal(err)
+		}
+		c := fake.Calls()[0]
+		// `composer update` (not install) re-resolves from the candidate manifest
+		// and rewrites composer.lock; install would ignore the reverted manifest.
+		if c.Name != "composer" || !reflect.DeepEqual(c.Args, []string{"update", "--no-interaction", "--no-progress"}) {
+			t.Errorf("composer cmd = %+v, want name=composer args=[update --no-interaction --no-progress]", c)
+		}
+		if !c.AllowTrustedBatch {
+			t.Error("composer invocation must set AllowTrustedBatch for Windows batch shims")
+		}
+		// The post-update security audit is suppressed via an env var rather than
+		// a flag, because Composer < 2.4 rejects the unknown --no-audit flag.
+		if !reflect.DeepEqual(c.ExtraEnv, []string{"COMPOSER_NO_AUDIT=1"}) {
+			t.Errorf("composer ExtraEnv = %v, want [COMPOSER_NO_AUDIT=1]", c.ExtraEnv)
 		}
 	})
 }
@@ -496,6 +521,12 @@ func TestVersionErrorPathsAllManagers(t *testing.T) {
 			stub:    func(f *execx.Fake) { f.Default.Result = execx.Result{Stdout: []byte("")} },
 			wantErr: "produced no output",
 		},
+		{
+			manager: COMPOSER,
+			name:    "runner failure",
+			stub:    func(f *execx.Fake) { f.Default.Err = errors.New("spawn failed") },
+			wantErr: "inspect package manager",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.manager)+"/"+tc.name, func(t *testing.T) {
@@ -562,6 +593,25 @@ func TestVersionYarn(t *testing.T) {
 	}
 	if id != "yarn 4.3.1" {
 		t.Errorf("identity = %q, want %q", id, "yarn 4.3.1")
+	}
+	if call := fake.Calls()[0]; !reflect.DeepEqual(call.Args, []string{"--version"}) {
+		t.Errorf("version args = %v, want [--version]", call.Args)
+	}
+}
+
+func TestVersionComposer(t *testing.T) {
+	// `composer --version` prints "Composer version x.y.z ..." with a capital C;
+	// the prefix check is case-insensitive so the manager name is not doubled
+	// into "composer Composer version ...".
+	fake := execx.NewFake()
+	fake.Default.Result = execx.Result{Stdout: []byte("Composer version 2.7.7 2024-06-10 22:11:12\n")}
+	inst := Installer{Runner: fake, Manager: COMPOSER, LookPath: found}
+	id, err := inst.Version(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "Composer version 2.7.7 2024-06-10 22:11:12" {
+		t.Errorf("identity = %q, want unprefixed composer version", id)
 	}
 	if call := fake.Calls()[0]; !reflect.DeepEqual(call.Args, []string{"--version"}) {
 		t.Errorf("version args = %v, want [--version]", call.Args)
@@ -684,6 +734,7 @@ func TestDependencyFiles(t *testing.T) {
 		"package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
 		"Cargo.toml", "Cargo.lock", "go.mod", "go.sum",
 		"pyproject.toml", "uv.lock",
+		"composer.json", "composer.lock",
 	}
 	if !reflect.DeepEqual(files, want) {
 		t.Errorf("DependencyFiles() = %v, want %v", files, want)
