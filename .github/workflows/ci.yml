@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # Superseded runs on the same PR are cancelled when new commits arrive; pushes
 # to main always run to completion so every mainline commit keeps its status.
