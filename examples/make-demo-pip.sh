@@ -6,13 +6,27 @@
 # requirements.txt itself, so pip never touches PyPI. Re-run the script any
 # time to start fresh.
 #
-# Generation needs only git and zip; bisecting the result additionally needs
-# pip (>= 22.3, for --python) and a python3 on PATH.
+# Generation needs git plus either zip or a Python interpreter (the wheels
+# are zipped with `python -m zipfile` where zip is unavailable, notably Git
+# Bash on Windows runners); bisecting the result additionally needs pip
+# (>= 22.3, for --python) and a python3/python on PATH.
 set -eu
 
-for tool in git zip; do
-    command -v "$tool" >/dev/null 2>&1 || { echo "error: $tool is required" >&2; exit 1; }
-done
+command -v git >/dev/null 2>&1 || { echo "error: git is required" >&2; exit 1; }
+
+# WHEEL_PY is the interpreter for the `python -m zipfile` fallback; empty
+# means zip(1) is available and preferred.
+WHEEL_PY=
+if ! command -v zip >/dev/null 2>&1; then
+    if command -v python3 >/dev/null 2>&1; then
+        WHEEL_PY=python3
+    elif command -v python >/dev/null 2>&1; then
+        WHEEL_PY=python
+    else
+        echo "error: zip or a python interpreter is required to build the demo wheels" >&2
+        exit 1
+    fi
+fi
 
 cd "$(dirname "$0")"
 chmod -R u+w demo-pip 2>/dev/null || true
@@ -42,7 +56,15 @@ make_wheel() {
     printf '%s/__init__.py,,\n%s-%s.dist-info/METADATA,,\n%s-%s.dist-info/WHEEL,,\n%s-%s.dist-info/RECORD,,\n' \
         "$name" "$name" "$ver" "$name" "$ver" "$name" "$ver" \
         > "$stg/$name-$ver.dist-info/RECORD"
-    ( cd "$stg" && zip -qr "$APP/wheels/$name-$ver-py3-none-any.whl" . )
+    # The archive is built inside the staging directory and moved into place:
+    # the python fallback runs a native interpreter that cannot open MSYS-style
+    # /d/... destination paths, while mv handles them fine.
+    if [ -z "$WHEEL_PY" ]; then
+        ( cd "$stg" && zip -qr wheel.zip . )
+    else
+        ( cd "$stg" && "$WHEEL_PY" -m zipfile -c wheel.zip "$name" "$name-$ver.dist-info" )
+    fi
+    mv "$stg/wheel.zip" "$APP/wheels/$name-$ver-py3-none-any.whl"
     rm -rf "$stg"
 }
 
