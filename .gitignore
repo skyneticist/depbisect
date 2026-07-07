@@ -1,10 +1,14 @@
 /depbisect
+/depbisect.exe
 /bin/
 /dist/
 docs/assets/vhs
 coverage.out
-depbisect-report.md
-depbisect-report.json
+# depbisect run artifacts: the default report, --report-{md,json} named
+# variants, and the resumable checkpoint an interrupted run leaves behind.
+depbisect-report.*
+depbisect-*-report.*
+.depbisect-checkpoint.jsonl
 .claude
 .cache/
 .vscode/
