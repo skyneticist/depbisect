@@ -1,10 +1,9 @@
 name: DepBisect
 description: >-
   Find the smallest set of dependency updates (package.json, Cargo.toml,
-  go.mod, or pyproject.toml) between two Git revisions that makes a command
-  fail. Requires a
-  checkout with enough history to contain the base revision (actions/checkout
-  with fetch-depth: 0).
+  go.mod, pyproject.toml, composer.json, or requirements.txt) between two Git
+  revisions that makes a command fail. Requires a checkout with enough history
+  to contain the base revision (actions/checkout with fetch-depth: 0).
 branding:
   icon: git-commit
   color: orange

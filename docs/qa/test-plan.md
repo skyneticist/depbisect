@@ -25,7 +25,7 @@ objectives, in priority order:
 ## 2. Core algorithm and correctness
 
 - [auto] `ddmin` 1-minimality and ordering invariants (unit + `FuzzMinimize`).
-- [auto] Manifest parsers for every ecosystem (8 fuzz targets).
+- [auto] Manifest parsers for every ecosystem (12 fuzz targets).
 - [exp] Randomised property test: for a generated change-set with a known
   interacting culprit subset, assert the reported `minimalSet` is exactly that
   subset and `minimalityProven` is true. (Demos cover fixed fixtures.)
@@ -81,6 +81,8 @@ Ecosystems × scenarios. Simple/complex/jobs/swarm are [auto] via `make demos`.
 | cargo | auto | auto | auto | auto |
 | go | auto | auto | auto | auto |
 | uv | auto | — | — | — |
+| composer | auto | — | — | — |
+| pip | auto | — | — | — |
 
 - [exp] Auto-detection precedence when multiple manifests coexist; explicit
   `--pm` override wins.
@@ -139,7 +141,8 @@ Smoke every install path on a clean machine/container before tagging:
 - `install.sh` (checksum verified)
 - `go install .../cmd/depbisect@latest`
 - Docker images (`ghcr.io/...`) — default js variant (git/node/npm/pnpm/yarn) plus the
-  `go`, `rust`, and `python` (uv) variants [auto in CI: `docker-smoke` + `docker-variants`].
+  `go`, `rust`, `python` (uv + pip), and `php` (composer) variants
+  [auto in CI: `docker-smoke` + `docker-variants`].
 
 ## 11. Release gate
 
@@ -157,7 +160,7 @@ Tag only when all [gate] rows pass **and**:
 make ci        # fmt, vet, lint, test, race, cover, vuln, fuzz smoke
 make demos     # end-to-end bisection across every ecosystem
 make docker-smoke           # default js image: toolchain + real bisection
-make docker-smoke-variants  # go / rust / python images: toolchain checks
+make docker-smoke-variants  # go / rust / python / php images: toolchain checks
 ```
 
 Exploratory [exp] items are run by hand against `make build` output; findings

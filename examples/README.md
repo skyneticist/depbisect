@@ -309,7 +309,7 @@ a zip archiver to build the demo or PHP's zip extension to install it.
 
 The demo bumps two packages; only `acme/breakage 1.0.0 -> 2.0.0` breaks the
 check (`Health::ok()` starts returning `false`). Candidates install with
-`composer update`, which re-resolves `composer.json` against the artifact
+`composer update`, which re-resolves `composer.json` against the path
 repository and regenerates `vendor/`, then the check runs under `php`:
 
 ```sh

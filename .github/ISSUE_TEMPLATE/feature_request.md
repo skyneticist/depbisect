@@ -13,4 +13,4 @@ What are you trying to do that DepBisect cannot do today?
 **Alternatives considered**
 
 Check [docs/limitations.md](../../docs/limitations.md) first — some gaps
-(workspaces, yarn, lockfile-only bisection) are known and tracked.
+(workspaces, lockfile-only bisection) are known and tracked.
