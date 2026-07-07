@@ -5,7 +5,6 @@
 ## Checklist
 
 - [ ] Tests added/updated before the change (see CONTRIBUTING.md)
-- [ ] `gofmt -l .` prints nothing
-- [ ] `go vet ./...`, `go test -race ./...`, `staticcheck ./...` pass
+- [ ] `make check` passes (fmt, vet, lint, tests, race detector)
 - [ ] Docs updated if behavior changed
 - [ ] No writes outside DepBisect-owned temp directories

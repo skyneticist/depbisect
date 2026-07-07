@@ -67,7 +67,7 @@ algorithm.
 | Package | Purpose |
 |---|---|
 | `internal/ddmin` | pure delta-debugging algorithm |
-| `internal/manifest` | package.json + lockfile parsing, diffing, candidate rendering |
+| `internal/manifest` | manifest + lockfile parsing, diffing, candidate rendering |
 | `internal/execx` | subprocess runner (real + fake) |
 | `internal/gitx` | git operations over the runner |
 | `internal/pm` | package-manager detection and installs |
@@ -83,7 +83,7 @@ Tag `vX.Y.Z` (semver). Pushing the tag runs four workflows in parallel:
 
 - **`release`** (goreleaser) — builds reproducible binaries + `checksums.txt`, publishes the GitHub Release, and (once the bucket/tap repos are configured) the Homebrew formula and Scoop manifest.
 - **`npm publish`** — `scripts/build-npm.mjs` cross-compiles every target and publishes the `depbisect` launcher plus its per-platform `@depbisect/*` packages to npm with provenance. See [npm/](npm/).
-- **`Docker`** — builds the multi-arch, per-ecosystem image variants from the [Dockerfile](Dockerfile) (`latest` for JavaScript; `go`, `rust`, and `python` aliases plus `X.Y.Z[-suffix]` tags) and pushes them to `ghcr.io/skyneticist/depbisect` using the built-in `GITHUB_TOKEN`.
+- **`Docker`** — builds the multi-arch, per-ecosystem image variants from the [Dockerfile](Dockerfile) (`latest` for JavaScript; `go`, `rust`, `python`, and `php` aliases plus `X.Y.Z[-suffix]` tags) and pushes them to `ghcr.io/skyneticist/depbisect` using the built-in `GITHUB_TOKEN`.
 - **`Move version aliases`** — re-points the sliding `v0` / `v0.1` tags at the new release so `uses: skyneticist/depbisect@v0` stays current.
 
 `install.sh` installs the latest release binary with checksum verification. The

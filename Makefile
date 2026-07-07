@@ -209,7 +209,7 @@ demos: demo demo-complex demo-jobs demo-swarm demo-yarn demo-cargo demo-go demo-
 ##@ Docker
 
 .PHONY: docker-build
-docker-build: ## Build the Docker image as depbisect:dev (TARGET=go|rust|python for an ecosystem variant; default js).
+docker-build: ## Build the Docker image as depbisect:dev (TARGET=go|rust|python|php for an ecosystem variant; default js).
 	$(call need,docker,see https://docs.docker.com/get-docker/)
 	docker build $(if $(TARGET),--target $(TARGET)) -t depbisect:dev .
 
@@ -227,7 +227,7 @@ docker-smoke: docker-build ## Mirror the CI docker-smoke job: default js image t
 	grep -q leftpad $(BIN_DIR)/bisect.log
 
 .PHONY: docker-smoke-variants
-docker-smoke-variants: ## Mirror the CI docker-variants job: go/rust/python image toolchain checks (needs docker).
+docker-smoke-variants: ## Mirror the CI docker-variants job: go/rust/python/php image toolchain checks (needs docker).
 	$(call need,docker,see https://docs.docker.com/get-docker/)
 	docker build --target go -t depbisect:dev-go .
 	docker run --rm depbisect:dev-go help >/dev/null
@@ -237,7 +237,10 @@ docker-smoke-variants: ## Mirror the CI docker-variants job: go/rust/python imag
 	docker run --rm --entrypoint sh depbisect:dev-rust -eu -c 'git --version; cargo --version; rustc --version'
 	docker build --target python -t depbisect:dev-python .
 	docker run --rm depbisect:dev-python help >/dev/null
-	docker run --rm --entrypoint sh depbisect:dev-python -eu -c 'git --version; uv --version; python3 --version'
+	docker run --rm --entrypoint sh depbisect:dev-python -eu -c 'git --version; uv --version; python3 --version; pip --version'
+	docker build --target php -t depbisect:dev-php .
+	docker run --rm depbisect:dev-php help >/dev/null
+	docker run --rm --entrypoint sh depbisect:dev-php -eu -c 'git --version; php --version; composer --version'
 
 ##@ Release & media
 

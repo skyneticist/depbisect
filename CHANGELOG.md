@@ -14,6 +14,19 @@ All notable changes to this project are documented here. The format follows
   Berry's automatic CI immutable-installs mode disabled, since candidate
   manifests must be allowed to update the lockfile. Yarn workspaces remain
   unsupported, matching npm/pnpm.
+- PHP (Composer) support: bisect direct `composer.json` `require` and
+  `require-dev` changes, with `composer update` candidate installs and
+  resolved-version annotations from `composer.lock` (optional — it only
+  enriches diagnostics). Auto-detected from `composer.json`, or select with
+  `--pm composer`.
+- Python (pip) support: bisect the requirement lines of `requirements.txt`,
+  which doubles as the lockfile — exact `==` pins are read as the resolved
+  versions, so pinned files (`pip-compile` or `pip freeze` output) work best.
+  Each trial installs into its own worktree-local `.venv` using the host pip
+  (≥ 22.3, via `pip --python`), and plain `python`/`pytest` verification
+  commands are resolved inside that venv automatically. Auto-detected from
+  `requirements.txt`, or select with `--pm pip`; files using `--hash` pins
+  are rejected up front.
 - The live `ddmin` progress row now animates a smooth scanner sweep (a bright
   head with a fading tail), and its tested count and elapsed time update
   continuously between trial events instead of freezing during long installs.
@@ -23,9 +36,9 @@ All notable changes to this project are documented here. The format follows
   (the flag still wins). The built-in default stays `1`: parallel trials
   require a verification command that is safe to run concurrently.
 - The GitHub Action gained a `jobs` input, mirroring `--jobs`.
-- Per-ecosystem Docker image variants: `go`, `rust`, and `python` (with uv)
-  tags alongside the default JavaScript image (`latest`), each bundling `git`
-  plus that ecosystem's toolchain.
+- Per-ecosystem Docker image variants: `go`, `rust`, `python` (with uv and
+  pip), and `php` (with composer) tags alongside the default JavaScript image
+  (`latest`), each bundling `git` plus that ecosystem's toolchain.
 - The repository dogfoods its own GitHub Action: a `self-bisect` workflow
   bisects any dependency-update PR that breaks `go test` and posts the report
   to the job summary.
@@ -47,8 +60,8 @@ All notable changes to this project are documented here. The format follows
 - Classic-style (and redirected/CI) output aligns its columns like C/Rust
   tooling: trial numbers and change counters pad to a stable width, and
   change lists render as aligned name/version columns instead of bullets.
-- The Docker runtime image moved from Node 20 (end-of-life April 2026) to
-  Node 22 LTS.
+- The default (JavaScript) Docker image moved from Node 20 (end-of-life
+  April 2026) to Node 26.
 
 ### Fixed
 

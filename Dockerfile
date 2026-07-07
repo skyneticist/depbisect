@@ -92,7 +92,8 @@ ENTRYPOINT ["depbisect"]
 CMD ["help"]
 
 # --- js (default): bisect package.json projects with npm, pnpm, or yarn ------
-# Node 22 is the active LTS (Node 20 reached end-of-life in April 2026).
+# Dependabot keeps the Node pin current (Node 20 reached end-of-life in
+# April 2026 and was moved off then).
 FROM node:26-slim AS js
 # Pin pnpm and bake it into the image: without a pin, corepack fetches the
 # *latest* pnpm on first use — a network download at run time and a moving

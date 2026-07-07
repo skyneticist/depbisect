@@ -2,7 +2,7 @@
 
 ## Model
 
-DepBisect runs with your privileges, in your repository, and executes two kinds of subprocesses: the package manager (`npm`/`pnpm`/`yarn install`) and the verification command you supply. Installing dependencies executes lifecycle scripts of the candidate dependency versions, exactly as a manual install would — bisecting untrusted dependency ranges therefore executes untrusted code. Run it in the same environment you would use for `npm install` of those versions (e.g. a CI sandbox).
+DepBisect runs with your privileges, in your repository, and executes two kinds of subprocesses: the package-manager install (`npm install`, `cargo fetch`, `pip install`, …) and the verification command you supply. Installing dependencies executes lifecycle scripts of the candidate dependency versions, exactly as a manual install would — bisecting untrusted dependency ranges therefore executes untrusted code. Run it in the same environment you would use for `npm install` of those versions (e.g. a CI sandbox).
 
 ## What DepBisect does
 
@@ -26,7 +26,7 @@ DepBisect runs with your privileges, in your repository, and executes two kinds 
 
 - The verification command's own stdout/stderr is streamed to your terminal with `--verbose`; that stream is your responsibility.
 - The command line you pass (including any secrets embedded in it) is recorded in reports. Don't put secrets in argv — use environment variables, which are inherited by the child but never recorded.
-- `--keep-worktrees` leaves an installed `node_modules` tree on disk until you remove it.
+- `--keep-worktrees` leaves an installed dependency tree (a `node_modules`, a `.venv`, …) on disk until you remove it.
 - Checkpoints record revisions, the verification argv, dependency identifiers,
   outcomes, and timings. They do not record environment variables or command
   output and are created with owner-only permissions where the platform

@@ -17,7 +17,7 @@
 
 You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 
-`git bisect` walks *commits* — DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies in your manifest (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, or `composer.json`) between two revisions, then narrows them to the exact minimal subset that makes your command fail — and proves no smaller set does. Every install runs in a throwaway git worktree, so it never touches your checkout.
+`git bisect` walks *commits* — DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies in your manifest (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `composer.json`, or `requirements.txt`) between two revisions, then narrows them to the exact minimal subset that makes your command fail — and proves no smaller set does. Every install runs in a throwaway git worktree, so it never touches your checkout.
 
 ![DepBisect narrowing 12 dependency changes down to the minimal 5-package set that broke the build](https://raw.githubusercontent.com/skyneticist/depbisect/main/docs/assets/gifs/js/demo.gif)
 
@@ -86,9 +86,9 @@ $ depbisect run --base origin/main --runs 3 -- npm test
 
     react-scripts              4.0.3  →  5.0.1
     jest-environment-jsdom    27.5.1  →  29.7.0
-    webpack                    5.75.0  →  5.97.1
-    @typescript-eslint/parser  5.62.0  →  7.18.0
-    eslint-plugin-react       11.3.2  →  7.37.2
+    webpack                   5.75.0  →  5.97.1
+    @typescript-eslint/parser 5.62.0  →  7.18.0
+    eslint-plugin-react       7.31.2  →  7.37.2
 
   report  depbisect-report.md
   report  depbisect-report.json
@@ -105,8 +105,9 @@ $ depbisect run --base origin/main --runs 3 -- npm test
 | go      | `go.mod`         | `go.sum`                        |
 | uv      | `pyproject.toml` | `uv.lock`                       |
 | composer | `composer.json` | `composer.lock`                |
+| pip     | `requirements.txt` | `requirements.txt` (exact `==` pins) |
 
-Auto-detected from the manifest, or force one with `--pm <npm|pnpm|yarn|cargo|go|uv|composer>`.
+Auto-detected from the manifest, or force one with `--pm <npm|pnpm|yarn|cargo|go|uv|composer|pip>`.
 
 ## Parallel bisection with `--jobs`
 

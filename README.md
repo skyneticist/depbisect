@@ -223,8 +223,8 @@ DepBisect is built to be safe to point at a real repository:
 | uv      | `pyproject.toml` | `uv.lock`                       |
 | composer | `composer.json` | `composer.lock`                 |
 
-Workspaces (npm/pnpm/yarn, Go `go.work`, and uv `[tool.uv.workspace]`) are not supported yet; DepBisect exits with
-a clear error rather than guessing.
+Workspaces (npm/pnpm/yarn, Cargo `[workspace]`, Go `go.work`, and uv `[tool.uv.workspace]`) are
+not supported yet; DepBisect exits with a clear error rather than guessing.
 
 ## Configuration
 
@@ -342,11 +342,11 @@ the report to the job summary.
 ## Limitations
 
 - Only **direct** dependency changes in your manifest (`package.json`, `Cargo.toml`, `go.mod`,
-  or `pyproject.toml`) are bisected. Lockfile-only changes (same spec, different resolution) are
-  detected and reported, not bisected.
+  `pyproject.toml`, `composer.json`, or `requirements.txt`) are bisected. Lockfile-only changes
+  (same spec, different resolution) are detected and reported, not bisected.
 - Installing candidates needs **registry or module access** and uses your package manager's
   normal configuration.
-- **Workspaces** (npm/pnpm/yarn and Go `go.work`) are not supported yet.
+- **Workspaces** (npm/pnpm/yarn, Cargo, Go `go.work`, and uv) are not supported yet.
 - On Windows, implicit `.bat`/`.cmd` verification commands are rejected; invoke `cmd.exe`
   explicitly (e.g. `-- cmd.exe /d /s /c "npm test"`) when shell semantics are intended.
 
