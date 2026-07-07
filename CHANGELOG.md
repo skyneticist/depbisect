@@ -76,7 +76,8 @@ All notable changes to this project are documented here. The format follows
   tooling: trial numbers and change counters pad to a stable width, and
   change lists render as aligned name/version columns instead of bullets.
 - The default (JavaScript) Docker image moved from Node 20 (end-of-life
-  April 2026) to Node 26.
+  April 2026) to Node 26. Since corepack is no longer bundled with Node,
+  the image's pinned pnpm and yarn are now installed directly via npm.
 
 ### Fixed
 

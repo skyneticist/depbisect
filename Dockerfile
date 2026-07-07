@@ -96,19 +96,17 @@ CMD ["help"]
 # Dependabot keeps the Node pin current (Node 20 reached end-of-life in
 # April 2026 and was moved off then).
 FROM node:26-slim AS js
-# Pin pnpm and bake it into the image: without a pin, corepack fetches the
-# *latest* pnpm on first use — a network download at run time and a moving
-# target that has broken this image before (a pnpm too new for the image's
-# Node crashed on first use). A baked-in known-good version works offline and
-# fails loudly in CI's docker-smoke if an upgrade ever misbehaves.
-ENV COREPACK_DEFAULT_TO_LATEST=0
+# Pin pnpm and yarn and bake them into the image via npm — corepack is no
+# longer bundled with Node >= 25. Unpinned versions are a network download at
+# run time and a moving target that has broken this image before (a pnpm too
+# new for the image's Node crashed on first use). Baked-in known-good versions
+# work offline and fail loudly in CI's docker-smoke if an upgrade ever
+# misbehaves.
 RUN apt-get update \
  && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
- && corepack enable \
- && corepack prepare pnpm@9.15.4 --activate \
- && corepack prepare yarn@1.22.22 --activate \
+ && npm install -g pnpm@9.15.4 yarn@1.22.22 \
  && git config --system --add safe.directory '*'
 COPY --from=build /out/depbisect /usr/local/bin/depbisect
 WORKDIR /work
