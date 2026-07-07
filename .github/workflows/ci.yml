@@ -331,6 +331,64 @@ jobs:
           path: depbisect-*-report.*
           if-no-files-found: ignore
 
+  windows-pip-smoke:
+    name: Windows pip CLI smoke test against example repo
+    # pip's trial environments carry Windows-only code paths — the Scripts/
+    # venv layout, .exe console-script resolution in the verify bridge, and
+    # the python-before-python3 interpreter preference — that unit tests cover
+    # with fakes but only a real Windows runner exercises end to end. Mirrors
+    # the windows-smoke job's Git Bash setup; setup-python supplies python and
+    # a pip >= 22.3. The demo generator builds its wheels with
+    # `python -m zipfile` here, since Git Bash ships no zip(1). The second
+    # bisection repeats the run with --jobs so concurrent lanes create and
+    # tear down their .venvs under Windows file-locking semantics.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Generate pip example repo
+        run: ./examples/make-demo-pip.sh
+      - name: Build CLI (depbisect.exe)
+        run: go build -o depbisect.exe ./cmd/depbisect
+      - name: Bisect the pip example repo
+        run: |
+          ./depbisect.exe run \
+            --repo examples/demo-pip/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --report-json depbisect-pip-report.json \
+            -- python check.py
+      - name: Assert the culprit was identified
+        run: |
+          jq -e '.outcome == "minimal-set-found" and .packageManager == "pip" and (.minimalSet | length) == 1 and .minimalSet[0].name == "breakage"' depbisect-pip-report.json
+      - name: Bisect the pip example repo in parallel (concurrent .venv lanes)
+        run: |
+          ./depbisect.exe run \
+            --repo examples/demo-pip/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --jobs 4 \
+            --report-json depbisect-pip-jobs-report.json \
+            -- python check.py
+      - name: Assert the parallel run finds the same culprit
+        run: |
+          jq -e '.outcome == "minimal-set-found" and .packageManager == "pip" and (.minimalSet | length) == 1 and .minimalSet[0].name == "breakage"' depbisect-pip-jobs-report.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-pip-smoke-reports
+          path: depbisect-pip*-report.json
+          if-no-files-found: ignore
+
   demo-yarn:
     name: Yarn CLI smoke test against example repo
     # Classic yarn (1.x) is preinstalled on GitHub's ubuntu and macos runners,
@@ -384,6 +442,70 @@ jobs:
         with:
           name: yarn-demo-reports-${{ matrix.os }}
           path: depbisect-yarn-report.*
+          if-no-files-found: ignore
+
+  demo-pnpm:
+    name: pnpm CLI smoke test against example repo
+    # pnpm is not preinstalled on GitHub's runners, so it is installed with the
+    # preinstalled npm. Unlike the npm and yarn demos, the example repo commits
+    # its file: packages inside the repository: pnpm rewrites file: specifiers
+    # to lockfile-relative paths, so out-of-repo packages would break when
+    # DepBisect materializes the repo in a temporary worktree (see
+    # examples/make-demo-pnpm.sh).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: Install pnpm
+        run: npm install -g pnpm
+      - name: Generate pnpm example repo
+        run: ./examples/make-demo-pnpm.sh
+      - name: Build CLI
+        run: go build ./cmd/depbisect
+      - name: Bisect the pnpm example repo
+        run: |
+          ./depbisect run \
+            --repo examples/demo-pnpm/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --report-md depbisect-pnpm-report.md \
+            --report-json depbisect-pnpm-report.json \
+            -- node test.js
+      - name: Assert the pnpm culprit was identified
+        # Specs come verbatim from the generator's package.json; resolved
+        # versions come from pnpm-lock.yaml, whose exact file:-path rendering
+        # varies across lockfile versions, so they are matched loosely.
+        run: |
+          node -e '
+            const r = require("./depbisect-pnpm-report.json");
+            const c = r.minimalSet && r.minimalSet[0];
+            const valid =
+              r.outcome === "minimal-set-found" &&
+              r.packageManager === "pnpm" &&
+              r.minimalSet.length === 1 &&
+              c.name === "leftpad" &&
+              c.oldSpec === "file:./pkgs/leftpad-1.0.0" &&
+              c.newSpec === "file:./pkgs/leftpad-2.0.0" &&
+              c.oldResolved.includes("leftpad-1.0.0") &&
+              c.newResolved.includes("leftpad-2.0.0");
+            if (!valid) {
+              console.error("unexpected result:", JSON.stringify({outcome: r.outcome, packageManager: r.packageManager, minimalSet: r.minimalSet}, null, 2));
+              process.exit(1);
+            }
+            console.log("pnpm demo verified: culprit =", c.name, c.oldSpec, "->", c.newSpec, "reproduced", r.confidence.failures + "/" + r.confidence.runs);
+          '
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: pnpm-demo-reports-${{ matrix.os }}
+          path: depbisect-pnpm-report.*
           if-no-files-found: ignore
 
   demo-cargo:
@@ -671,7 +793,10 @@ jobs:
     # inside requirements.txt itself), so no packages are downloaded during the
     # bisection, matching the other demo jobs. Each trial installs into a
     # per-worktree .venv, and the bare `python check.py` verify command runs
-    # inside it through the venv bridge.
+    # inside it through the venv bridge. The second bisection repeats the run
+    # with --jobs so concurrent lanes create and use their .venvs in parallel;
+    # windows-pip-smoke exercises the same concurrency under Windows
+    # file-locking semantics.
     strategy:
       fail-fast: false
       matrix:
@@ -701,6 +826,18 @@ jobs:
       - name: Assert the culprit was identified
         run: |
           jq -e '.outcome == "minimal-set-found" and .packageManager == "pip" and (.minimalSet | length) == 1 and .minimalSet[0].name == "breakage"' depbisect-pip-report.json
+      - name: Bisect the pip example repo in parallel (concurrent .venv lanes)
+        run: |
+          ./depbisect run \
+            --repo examples/demo-pip/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --jobs 4 \
+            --report-json depbisect-pip-jobs-report.json \
+            -- python check.py
+      - name: Assert the parallel run finds the same culprit
+        run: |
+          jq -e '.outcome == "minimal-set-found" and .packageManager == "pip" and (.minimalSet | length) == 1 and .minimalSet[0].name == "breakage"' depbisect-pip-jobs-report.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
