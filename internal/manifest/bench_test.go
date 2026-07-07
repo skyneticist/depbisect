@@ -59,6 +59,189 @@ func BenchmarkParsePackageLock(b *testing.B) {
 	}
 }
 
+func BenchmarkParsePnpmLock(b *testing.B) {
+	entries := make([]string, 100)
+	for i := range entries {
+		entries[i] = fmt.Sprintf("  dep%03d:\n    specifier: ^1.0.0\n    version: 1.0.%d", i, i)
+	}
+	data := []byte("lockfileVersion: '6.0'\n\ndependencies:\n" + strings.Join(entries, "\n") + "\n")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ParsePnpmLock(data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkParseYarnLock(b *testing.B) {
+	entries := make([]string, 100)
+	for i := range entries {
+		entries[i] = fmt.Sprintf("dep%03d@^1.0.0:\n  version \"1.0.%d\"\n", i, i)
+	}
+	data := []byte("# yarn lockfile v1\n\n" + strings.Join(entries, "\n"))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ParseYarnLock(data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkParseCargoToml(b *testing.B) {
+	entries := make([]string, 100)
+	for i := range entries {
+		entries[i] = fmt.Sprintf("dep%03d = \"1.0.%d\"", i, i)
+	}
+	data := []byte("[package]\nname = \"bench\"\n\n[dependencies]\n" + strings.Join(entries, "\n") + "\n")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ParseCargoToml(data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkParseCargoLock(b *testing.B) {
+	entries := make([]string, 100)
+	for i := range entries {
+		entries[i] = fmt.Sprintf("[[package]]\nname = \"dep%03d\"\nversion = \"1.0.%d\"\n", i, i)
+	}
+	data := []byte("version = 3\n\n" + strings.Join(entries, "\n"))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ParseCargoLock(data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkParseGoMod(b *testing.B) {
+	entries := make([]string, 100)
+	for i := range entries {
+		entries[i] = fmt.Sprintf("\texample.com/dep%03d v1.0.%d", i, i)
+	}
+	data := []byte("module example.com/bench\n\ngo 1.20\n\nrequire (\n" + strings.Join(entries, "\n") + "\n)\n")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ParseGoMod(data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkParseGoSum(b *testing.B) {
+	entries := make([]string, 100)
+	for i := range entries {
+		entries[i] = fmt.Sprintf("example.com/dep%03d v1.0.%d h1:aaa\nexample.com/dep%03d v1.0.%d/go.mod h1:bbb", i, i, i, i)
+	}
+	data := []byte(strings.Join(entries, "\n") + "\n")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ParseGoSum(data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkParsePyproject(b *testing.B) {
+	entries := make([]string, 100)
+	for i := range entries {
+		entries[i] = fmt.Sprintf("\"dep%03d>=1.0.%d\"", i, i)
+	}
+	data := []byte("[project]\nname = \"bench\"\nrequires-python = \">=3.9\"\ndependencies = [" + strings.Join(entries, ", ") + "]\n")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ParsePyproject(data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkParseUvLock(b *testing.B) {
+	entries := make([]string, 100)
+	for i := range entries {
+		entries[i] = fmt.Sprintf("[[package]]\nname = \"dep%03d\"\nversion = \"1.0.%d\"\n", i, i)
+	}
+	data := []byte("version = 1\n\n" + strings.Join(entries, "\n"))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ParseUvLock(data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkParseComposerJSON(b *testing.B) {
+	entries := make([]string, 100)
+	for i := range entries {
+		entries[i] = fmt.Sprintf(`"acme/dep%03d":"^1.0.%d"`, i, i)
+	}
+	data := []byte(`{"name":"acme/bench","require":{` + strings.Join(entries, ",") + `}}`)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ParseComposerJSON(data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkParseComposerLock(b *testing.B) {
+	entries := make([]string, 100)
+	for i := range entries {
+		entries[i] = fmt.Sprintf(`{"name":"acme/dep%03d","version":"1.0.%d"}`, i, i)
+	}
+	data := []byte(`{"packages":[` + strings.Join(entries, ",") + `],"packages-dev":[]}`)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ParseComposerLock(data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// makeBenchRequirements builds a pinned requirements.txt with n packages,
+// prefixed by the option and comment lines a pip-compile export carries.
+func makeBenchRequirements(n int) []byte {
+	lines := make([]string, 0, n+3)
+	lines = append(lines, "# bench pins", "--no-index", "--find-links wheels")
+	for i := 0; i < n; i++ {
+		lines = append(lines, fmt.Sprintf("dep%03d==1.0.%d", i, i))
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+func BenchmarkParseRequirements(b *testing.B) {
+	data := makeBenchRequirements(100)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ParseRequirements(data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkParseRequirementsPins(b *testing.B) {
+	data := makeBenchRequirements(100)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ParseRequirementsPins(data); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkDiff(b *testing.B) {
 	base, err := ParsePackageJSON(makeBenchManifest(100, false))
 	if err != nil {

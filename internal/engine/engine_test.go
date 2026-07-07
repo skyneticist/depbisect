@@ -629,6 +629,69 @@ func TestRunFindsSingleCulpritYarn(t *testing.T) {
 	}
 }
 
+const pnpmLockOld = `lockfileVersion: '6.0'
+
+dependencies:
+  alpha:
+    specifier: 1.0.0
+    version: 1.0.0
+  beta:
+    specifier: 3.0.0
+    version: 3.0.0
+  gamma:
+    specifier: 5.0.0
+    version: 5.0.0
+`
+const pnpmLockNew = `lockfileVersion: '6.0'
+
+dependencies:
+  alpha:
+    specifier: 1.1.0
+    version: 1.1.0
+  beta:
+    specifier: 3.2.0
+    version: 3.2.0
+  gamma:
+    specifier: 5.5.0
+    version: 5.5.0
+`
+
+func threeChangePnpmRepo() *fakeGit {
+	git := threeChangeRepo()
+	for _, sha := range []string{"sha-base", "sha-head"} {
+		delete(git.files[sha], "package-lock.json")
+	}
+	git.files["sha-base"]["pnpm-lock.yaml"] = pnpmLockOld
+	git.files["sha-head"]["pnpm-lock.yaml"] = pnpmLockNew
+	return git
+}
+
+// TestRunFindsSingleCulpritPnpm exercises the whole engine over a pnpm repo:
+// pnpm-lock.yaml auto-detection, the shared package.json diff/render, and
+// pnpm-lock.yaml (v6) annotation. The v5 and v9 lockfile formats are covered
+// by the manifest unit tests.
+func TestRunFindsSingleCulpritPnpm(t *testing.T) {
+	env := newEnv(t, threeChangePnpmRepo(), func(deps map[string]string) bool {
+		return deps["beta"] == "3.2.0"
+	}, 3)
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeMinimalFound {
+		t.Fatalf("outcome = %q, diagnostics %v", res.Outcome, res.Diagnostics)
+	}
+	if res.PackageManager != "pnpm" {
+		t.Errorf("pm = %q, want pnpm", res.PackageManager)
+	}
+	if got := minimalNames(res); ids(got) != "beta" {
+		t.Errorf("minimal = %v, want [beta]", got)
+	}
+	if res.Minimal[0].OldResolved != "3.0.0" || res.Minimal[0].NewResolved != "3.2.0" {
+		t.Errorf("resolved versions not annotated from pnpm-lock.yaml: %+v", res.Minimal[0])
+	}
+}
+
 const goSumOld = `example.com/alpha v1.0.0 h1:aaa
 example.com/alpha v1.0.0/go.mod h1:aaamod
 example.com/beta v1.3.0 h1:bbb
