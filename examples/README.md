@@ -149,6 +149,37 @@ go build ./cmd/depbisect
 Both runs report the identical twelve-package minimal set (`replica-01` …
 `replica-12`). Re-run `make-demo-swarm.sh` to reset the generated repository.
 
+## pnpm demo
+
+`make-demo-pnpm.sh` generates a pnpm equivalent of the simple demo at
+`examples/demo-pnpm/`. It needs `git`, `node`, and `pnpm` (any version whose
+lockfile is v5/v6/v9 — pnpm 3 through 10), but **no network**: the
+dependencies are local `file:` packages.
+
+Unlike the npm and yarn demos, the packages live *inside* the app repository
+(`file:./pkgs/...`): pnpm rewrites `file:` specifiers to lockfile-relative
+paths in `pnpm-lock.yaml`, so packages outside the repo would break the moment
+DepBisect materializes the repo in a temporary worktree. In-repo relative
+paths travel with every worktree.
+
+The repo mirrors the npm demo: two commits, two bumped dependencies, and only
+`leftpad 1.0.0 -> 2.0.0` breaks `node test.js`. Candidate installs run
+`pnpm install --no-frozen-lockfile`, which reconciles `pnpm-lock.yaml` inside
+the worktree only.
+
+```sh
+./examples/make-demo-pnpm.sh
+go build ./cmd/depbisect
+./depbisect run --repo examples/demo-pnpm/app --base HEAD~1 --runs 3 -- node test.js
+```
+
+Expected result: minimal failing set = `leftpad file:./pkgs/leftpad-1.0.0 ->
+file:./pkgs/leftpad-2.0.0`, detected as pnpm from `pnpm-lock.yaml` with
+resolved versions annotated from it. Re-run the script any time to reset the
+generated repository.
+
+![DepBisect isolating the leftpad bump of the pnpm demo](../docs/assets/gifs/js/pnpm.gif)
+
 ## Yarn demo
 
 `make-demo-yarn.sh` generates a yarn equivalent of the simple demo at
@@ -171,6 +202,8 @@ go build ./cmd/depbisect
 Expected result: minimal failing set = `leftpad 1.0.0 -> 2.0.0`, detected as
 yarn from `yarn.lock` with resolved versions annotated from it. Re-run the
 script any time to reset the generated repository.
+
+![DepBisect isolating the leftpad bump of the yarn demo](../docs/assets/gifs/js/yarn.gif)
 
 ## Rust / Cargo demos
 
@@ -296,6 +329,8 @@ DepBisect bisects the PEP 621 `[project.dependencies]` array in `pyproject.toml`
 and reads resolved versions from `uv.lock`. Re-run the script any time to reset
 the generated repository.
 
+![DepBisect isolating the breakage bump of the Python (uv) demo](../docs/assets/gifs/python/uv.gif)
+
 ## PHP (composer) demo
 
 `make-demo-composer.sh` generates a PHP equivalent at `examples/demo-composer/`.
@@ -324,11 +359,15 @@ DepBisect bisects the `require` and `require-dev` sections of `composer.json` an
 reads resolved versions from `composer.lock`. Re-run the script any time to reset
 the generated repository.
 
+![DepBisect isolating the acme/breakage bump of the composer demo](../docs/assets/gifs/php/composer.gif)
+
 ## Python (pip) demo
 
 `make-demo-pip.sh` generates a pip equivalent at `examples/demo-pip/`.
-Generation needs only `git` and `zip`; bisecting it additionally needs `pip`
-(>= 22.3) and a `python3` on PATH, but **no network**: each package version is
+Generation needs `git` plus either `zip` or any Python interpreter (the
+wheels are zipped with `python -m zipfile` where `zip` is unavailable, e.g.
+Git Bash on Windows); bisecting it additionally needs `pip` (>= 22.3) and a
+`python3` on PATH, but **no network**: each package version is
 served from committed wheels in `wheels/` through `--no-index` and
 `--find-links wheels` lines inside `requirements.txt` itself, so installation
 runs entirely offline.
@@ -343,10 +382,17 @@ automatically:
 ./examples/make-demo-pip.sh
 go build ./cmd/depbisect
 ./depbisect run --repo examples/demo-pip/app --base HEAD~1 --runs 3 -- python check.py
+
+# Same repo under --jobs: concurrent lanes each create and verify against
+# their own .venv (this is what `make demo-pip` and CI run as a second pass):
+./depbisect run --repo examples/demo-pip/app --base HEAD~1 --runs 3 --jobs 4 -- python check.py
 ```
 
-Expected result: minimal failing set = `breakage 1.0.0 -> 2.0.0`.
+Expected result: minimal failing set = `breakage 1.0.0 -> 2.0.0` from either
+run — `--jobs` never changes the answer, only the wall time.
 
 DepBisect bisects the requirement lines of `requirements.txt`; pip has no
 separate lockfile, so the exact `==` pins double as the resolved versions in
 the report. Re-run the script any time to reset the generated repository.
+
+![DepBisect isolating the breakage bump of the pip demo](../docs/assets/gifs/python/pip.gif)

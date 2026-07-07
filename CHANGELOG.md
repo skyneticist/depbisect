@@ -49,6 +49,21 @@ All notable changes to this project are documented here. The format follows
   `--repo <path>` on the command line. Both bash and zsh.
 - Homebrew installs now bundle bash and zsh completions automatically,
   generated from the installed binary — no shell-profile editing needed.
+- End-to-end pnpm coverage: an offline pnpm example repo (`make demo-pnpm`,
+  `examples/make-demo-pnpm.sh`), a matching CI smoke job, and an engine-level
+  pnpm test — every supported package manager now completes a real-binary
+  bisection in CI. The example commits its `file:` packages inside the repo
+  because pnpm stores lockfile-relative paths.
+- The pip demo re-runs under `--jobs` (in `make demo-pip` and CI) to exercise
+  concurrent per-worktree virtual environments, and a dedicated
+  `windows-pip-smoke` CI job covers pip's Windows-only code paths (`Scripts/`
+  venv layout, `.exe` resolution) on a real Windows runner. The pip demo
+  generator now falls back to `python -m zipfile` when `zip` is unavailable
+  (notably Git Bash on Windows).
+- Demo GIFs for every remaining ecosystem — pnpm, yarn, Python (uv and pip),
+  and PHP (composer) — embedded in the examples guide.
+- Parser benchmarks now cover all ecosystems (pnpm/yarn/cargo/go/uv/composer
+  /pip lockfiles and manifests), not just the JavaScript parsers.
 
 ### Changed
 

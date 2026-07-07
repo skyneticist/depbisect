@@ -43,7 +43,8 @@ objectives, in priority order:
   orphaned worktrees (`git worktree list` is clean) and a valid resumable
   checkpoint.
 - [auto] Concurrent worktrees under `--jobs` (Windows file-locking path smoke-
-  tested by the `windows-smoke` CI job).
+  tested by the `windows-smoke` CI job; pip's per-worktree `.venv` lanes by
+  `windows-pip-smoke`).
 
 ## 4. Verification and the exit-code contract
 
@@ -82,7 +83,12 @@ Ecosystems × scenarios. Simple/complex/jobs/swarm are [auto] via `make demos`.
 | go | auto | auto | auto | auto |
 | uv | auto | — | — | — |
 | composer | auto | — | — | — |
-| pip | auto | — | — | — |
+| pip | auto | — | auto* | — |
+
+\* pip's `--jobs` cell is the simple demo re-run with `--jobs 4` (two changes,
+so two concurrent lanes), not a dedicated many-package jobs repo: it exists to
+exercise concurrent per-worktree `.venv` creation and the venv verify bridge
+under parallel lanes, which no other job covers.
 
 - [exp] Auto-detection precedence when multiple manifests coexist; explicit
   `--pm` override wins.
@@ -148,7 +154,8 @@ Smoke every install path on a clean machine/container before tagging:
 
 Tag only when all [gate] rows pass **and**:
 
-- `make ci` green locally; CI green on all three OSes incl. `windows-smoke`.
+- `make ci` green locally; CI green on all three OSes incl. `windows-smoke`
+  and `windows-pip-smoke`.
 - `make demos` green (all ecosystems).
 - `govulncheck` clean; coverage floor met.
 - README hero renders on GitHub; links resolve.
