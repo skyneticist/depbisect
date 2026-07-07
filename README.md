@@ -13,14 +13,14 @@
 
 You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 
-`git bisect` walks *commits* — DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies in your manifest (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, or `composer.json`) between two revisions, then narrows them to the exact minimal subset that makes your command fail — and proves no smaller set does. Every install runs in a throwaway git worktree, so it never touches your checkout.
+`git bisect` walks *commits* — DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies in your manifest (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `composer.json`, or `requirements.txt`) between two revisions, then narrows them to the exact minimal subset that makes your command fail — and proves no smaller set does. Every install runs in a throwaway git worktree, so it never touches your checkout.
 
 ![DepBisect narrowing 12 dependency changes down to the minimal 5-package set that broke the build](docs/assets/gifs/js/demo.gif)
 
 ## Features
 
 - **Provably minimal.** Runs Zeller's `ddmin` delta-debugging algorithm plus a one-by-one removal pass, so the answer is *1-minimal* — removing any single dependency from the set makes the failure stop reproducing — not merely "some failing subset."
-- **Multi-ecosystem.** JavaScript (`npm`, `pnpm`, `yarn`), Rust (`cargo`), Go (`go` modules), Python (`uv`), and PHP (`composer`), auto-detected from the manifest or selected with `--pm`. The same engine and 1-minimality proof back every ecosystem.
+- **Multi-ecosystem.** JavaScript (`npm`, `pnpm`, `yarn`), Rust (`cargo`), Go (`go` modules), Python (`uv`, `pip`), and PHP (`composer`), auto-detected from the manifest or selected with `--pm`. The same engine and 1-minimality proof back every ecosystem.
 - **Never touches your checkout.** Every install happens in a DepBisect-owned temporary git worktree. `git reset --hard` and `git clean -ffdx` run *only* there, never in your working tree.
 - **Flaky-test aware.** `--runs N` repeats each check; a candidate counts as failing only if *all* N runs fail. Mixed pass/fail results are reported as diagnostics, never silently guessed.
 - **Resumable.** Completed trials are checkpointed to disk. Interrupt with Ctrl-C, then pick up exactly where you left off with `--resume`.
@@ -42,7 +42,7 @@ You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 ## Install
 
 DepBisect ships as a single static binary — pick whichever method fits. You'll
-also need `git` and your project's package manager (`npm`, `pnpm`, `yarn`, `cargo`, `go`, `uv`, or `composer`) on your `PATH`.
+also need `git` and your project's package manager (`npm`, `pnpm`, `yarn`, `cargo`, `go`, `uv`, `composer`, or `pip` ≥ 22.3 plus a `python3`) on your `PATH`.
 
 **npm / pnpm** — no Go toolchain required:
 
@@ -84,8 +84,8 @@ go install github.com/skyneticist/depbisect/cmd/depbisect@latest
 
 **Docker** — one image variant per ecosystem, each bundling `git` plus that ecosystem's
 toolchain. The default (`latest`, also `X.Y.Z`) covers JavaScript (`node`, npm, pnpm, classic yarn);
-the `go`, `rust`, `python`, and `php` tags (also `X.Y.Z-go` etc.; `python` bundles uv, `php` bundles
-composer) cover the rest. Mount your repo at `/work`:
+the `go`, `rust`, `python`, and `php` tags (also `X.Y.Z-go` etc.; `python` bundles uv and pip, `php`
+bundles composer) cover the rest. Mount your repo at `/work`:
 
 ```sh
 docker run --rm -v "$PWD:/work" ghcr.io/skyneticist/depbisect \
@@ -147,6 +147,14 @@ The Go demos run fully offline via a generated `file://` module proxy; here DepB
 depbisect run --base origin/main --runs 3 -- uv run -- pytest
 ```
 
+Or from a pip project (`requirements.txt`, ideally with exact `==` pins). Each trial
+installs into its own throwaway `.venv`, and plain `python`/`pytest` verify commands run
+inside it automatically:
+
+```sh
+depbisect run --base origin/main --runs 3 -- pytest
+```
+
 **Working in PHP?** Same flow — auto-detected from `composer.json`:
 
 ```sh
@@ -180,13 +188,14 @@ DepBisect frames a failing dependency update as a [delta debugging](https://www.
 
 1. **Resolve & diff.** `--base` and `--to` (default `HEAD`) are resolved to commits; the
    direct dependencies declared in your manifest (`package.json`, `Cargo.toml`, `go.mod`,
-   `pyproject.toml`, or `composer.json`) are diffed with a structured parser (never regex).
+   `pyproject.toml`, `composer.json`, or `requirements.txt`) are diffed with a structured
+   parser (never regex).
 2. **Confirm the baselines.** In the isolated worktree, the command must *pass* with every
    update reverted and *fail* with every update applied. Anything else ends the run with a
    specific diagnostic instead of a bogus answer.
 3. **Delta-debug.** `ddmin` repeatedly resets the worktree, rewrites the manifest to apply
-   a candidate subset, installs with your package manager (npm, pnpm, yarn, cargo, go, uv, or composer), and
-   re-runs your command.
+   a candidate subset, installs with your package manager (npm, pnpm, yarn, cargo, go, uv,
+   composer, or pip), and re-runs your command.
 4. **Certify minimality.** Every one-change removal from the result is tested. The set is
    reported as 1-minimal only when all of those neighbors resolve and pass.
 5. **Report.** Results go to the terminal, `depbisect-report.md`, and a schema-stable
@@ -222,9 +231,16 @@ DepBisect is built to be safe to point at a real repository:
 | go      | `go.mod`       | `go.sum`                          |
 | uv      | `pyproject.toml` | `uv.lock`                       |
 | composer | `composer.json` | `composer.lock`                 |
+| pip     | `requirements.txt` | `requirements.txt` (exact `==` pins) |
 
 Workspaces (npm/pnpm/yarn, Go `go.work`, and uv `[tool.uv.workspace]`) are not supported yet; DepBisect exits with
 a clear error rather than guessing.
+
+pip has no separate lockfile: DepBisect bisects the requirement lines themselves and reads
+exact `==` pins as the resolved versions, so it works best on pinned files (`pip-compile`
+or `pip freeze` output). Each trial creates a fresh `.venv` in its worktree (needs pip ≥
+22.3 and `python3` on `PATH`); `-r` includes are kept but not followed, and files using
+`--hash` pins are rejected up front. See [docs/limitations.md](docs/limitations.md).
 
 ## Configuration
 
@@ -239,7 +255,7 @@ Common flags — run `depbisect help` for the complete list.
 | `--dry-run`           | Show detected changes and plan, then exit without bisecting     |
 | `--resume`            | Resume completed trials from the checkpoint                     |
 | `--quiet` / `--verbose` | Print only the final result / stream all subprocess output    |
-| `--pm <npm\|pnpm\|yarn\|cargo\|go\|uv\|composer>` | Force a package manager (default: auto-detected)     |
+| `--pm <npm\|pnpm\|yarn\|cargo\|go\|uv\|composer\|pip>` | Force a package manager (default: auto-detected)     |
 | `--style <name>`      | Output style: `modern` (default) or `classic`; also set via `DEPBISECT_STYLE` |
 
 **`--jobs` in action.** Candidate subsets are independent, so DepBisect evaluates them

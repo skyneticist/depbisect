@@ -8,6 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/skyneticist/depbisect/internal/execx"
@@ -117,6 +121,13 @@ type Harness struct {
 	StopOnPass bool
 	// Stream, when non-nil, receives live command output.
 	Stream io.Writer
+	// VenvDir, when non-empty, is a worktree-relative Python virtual
+	// environment that the install step creates in each trial (pip). Verify
+	// then resolves Command[0] in the venv's executable directory before
+	// falling back to PATH, and exports VIRTUAL_ENV plus a PATH with that
+	// directory prepended, so plain commands like "pytest" or
+	// "python check.py" run inside the trial's environment.
+	VenvDir string
 }
 
 // Verify runs the command in dir. It returns an error only for fatal
@@ -130,6 +141,11 @@ func (h Harness) Verify(ctx context.Context, dir string) (Verdict, error) {
 	if len(h.Command) == 0 {
 		return Verdict{}, errors.New("verify: empty command")
 	}
+	program := h.Command[0]
+	var extraEnv []string
+	if h.VenvDir != "" {
+		program, extraEnv = venvCommand(dir, h.VenvDir, program)
+	}
 	v := Verdict{Planned: runs}
 	for i := 0; i < runs; i++ {
 		if err := ctx.Err(); err != nil {
@@ -141,10 +157,11 @@ func (h Harness) Verify(ctx context.Context, dir string) (Verdict, error) {
 			runCtx, cancel = context.WithTimeout(ctx, h.Timeout)
 		}
 		res, err := h.Runner.Run(runCtx, execx.Cmd{
-			Dir:    dir,
-			Name:   h.Command[0],
-			Args:   h.Command[1:],
-			Stream: h.Stream,
+			Dir:      dir,
+			Name:     program,
+			Args:     h.Command[1:],
+			ExtraEnv: extraEnv,
+			Stream:   h.Stream,
 		})
 		cancel()
 		rr := RunResult{ExitCode: res.ExitCode, Duration: res.Duration}
@@ -167,4 +184,45 @@ func (h Harness) Verify(ctx context.Context, dir string) (Verdict, error) {
 		}
 	}
 	return v, nil
+}
+
+// venvCommand resolves program against the virtual environment venv (relative
+// to dir) and builds the environment overrides that activate the venv for the
+// command and its subprocesses. A bare program name is replaced with its
+// absolute path inside the venv when one exists — the OS resolves a bare name
+// against the parent process's PATH, so exporting PATH alone could never
+// redirect the command itself into the venv. Programs given with a path
+// separator, or absent from the venv (e.g. "make"), are left for the normal
+// PATH lookup and only the environment is exported.
+func venvCommand(dir, venv, program string) (string, []string) {
+	root := filepath.Join(dir, venv)
+	bin := filepath.Join(root, venvBinDir())
+	env := []string{
+		"VIRTUAL_ENV=" + root,
+		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+	}
+	if strings.ContainsAny(program, `/\`) {
+		return program, env
+	}
+	candidates := []string{filepath.Join(bin, program)}
+	// Windows venvs install console scripts as .exe; accept a bare "python"
+	// or "pytest" the same way PATH lookup would.
+	if runtime.GOOS == "windows" && filepath.Ext(program) == "" {
+		candidates = append(candidates, filepath.Join(bin, program+".exe"))
+	}
+	for _, c := range candidates {
+		if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
+			return c, env
+		}
+	}
+	return program, env
+}
+
+// venvBinDir returns a venv's executable directory name, which differs
+// between the POSIX (bin) and Windows (Scripts) layouts.
+func venvBinDir() string {
+	if runtime.GOOS == "windows" {
+		return "Scripts"
+	}
+	return "bin"
 }

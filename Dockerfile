@@ -59,9 +59,10 @@ WORKDIR /work
 ENTRYPOINT ["depbisect"]
 CMD ["help"]
 
-# --- python: bisect pyproject.toml projects with uv --------------------------
-# Matches the interpreter CI tests against (setup-python "3.12"). uv is told
-# to use it rather than downloading a managed interpreter at run time.
+# --- python: bisect pyproject.toml projects with uv, or requirements.txt ----
+# projects with pip (the base image ships python3 and a pip recent enough for
+# the --python redirection DepBisect uses). uv is told to use the bundled
+# interpreter rather than downloading a managed one at run time.
 FROM python:3.14-slim AS python
 ENV UV_PYTHON_PREFERENCE=only-system
 RUN apt-get update \

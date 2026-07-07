@@ -97,6 +97,8 @@ fuzz: ## Fuzz each target for $(FUZZTIME) (override: make fuzz FUZZTIME=2m).
 	$(GO) test -run='^$$' -fuzz='^FuzzParseUvLock$$'      -fuzztime=$(FUZZTIME) ./internal/manifest
 	$(GO) test -run='^$$' -fuzz='^FuzzParseComposerJSON$$' -fuzztime=$(FUZZTIME) ./internal/manifest
 	$(GO) test -run='^$$' -fuzz='^FuzzParseComposerLock$$' -fuzztime=$(FUZZTIME) ./internal/manifest
+	$(GO) test -run='^$$' -fuzz='^FuzzParseRequirements$$' -fuzztime=$(FUZZTIME) ./internal/manifest
+	$(GO) test -run='^$$' -fuzz='^FuzzParseRequirementsPins$$' -fuzztime=$(FUZZTIME) ./internal/manifest
 
 .PHONY: bench
 bench: ## Run all benchmarks.
@@ -116,10 +118,11 @@ ci: check cover vuln fuzz ## Full local pre-push mirror: check + cover + vuln + 
 ##@ Demos
 # Build, generate an offline example repo, and bisect it. Each target mirrors
 # the matching job in .github/workflows/ci.yml (demo / demo-yarn / demo-cargo /
-# demo-go / demo-python), so a green `make demo*` predicts a green pipeline.
-# Everything is offline (file: deps, vendored registries, a file:// GOPROXY,
-# committed wheels); the only requirement is the relevant toolchain (node+npm,
-# node+classic yarn 1.x, cargo, go, or uv+python) on PATH.
+# demo-go / demo-python / demo-composer / demo-pip), so a green `make demo*`
+# predicts a green pipeline. Everything is offline (file: deps, vendored
+# registries, a file:// GOPROXY, committed wheels); the only requirement is the
+# relevant toolchain (node+npm, node+classic yarn 1.x, cargo, go, uv+python,
+# php+composer, or pip>=22.3+python3) on PATH.
 
 # Constant env for the Go demos; GOPROXY is per-demo and set inline below.
 GO_DEMO_ENV ?= GOSUMDB=off GOFLAGS=-mod=mod GOTOOLCHAIN=local
@@ -202,8 +205,13 @@ demo-composer: build ## PHP (composer): bisect the offline example repo (culprit
 	$(call demo_setup,make-demo-composer.sh)
 	$(call demo_run,$(BINARY) run --repo examples/demo-composer/app --base HEAD~1 --runs 3 -- php check.php)
 
+.PHONY: demo-pip
+demo-pip: build ## Python (pip): bisect the offline example repo (culprit: breakage).
+	$(call demo_setup,make-demo-pip.sh)
+	$(call demo_run,$(BINARY) run --repo examples/demo-pip/app --base HEAD~1 --runs 3 -- python check.py)
+
 .PHONY: demos
-demos: demo demo-complex demo-jobs demo-swarm demo-yarn demo-cargo demo-go demo-python demo-composer ## Run every demo above.
+demos: demo demo-complex demo-jobs demo-swarm demo-yarn demo-cargo demo-go demo-python demo-composer demo-pip ## Run every demo above.
 	@printf '\nAll demos passed.\n'
 
 ##@ Docker

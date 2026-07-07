@@ -3,6 +3,8 @@ package verify
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -276,5 +278,92 @@ func TestVerifyPlannedMatchesRuns(t *testing.T) {
 	}
 	if v.Planned != 3 {
 		t.Errorf("Planned = %d, want 3", v.Planned)
+	}
+}
+
+// venvFixture creates a worktree containing a fake virtual environment whose
+// executable directory holds the named programs, and returns the worktree and
+// executable directory paths.
+func venvFixture(t *testing.T, programs ...string) (dir, bin string) {
+	t.Helper()
+	dir = t.TempDir()
+	bin = filepath.Join(dir, ".venv", venvBinDir())
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range programs {
+		if err := os.WriteFile(filepath.Join(bin, p), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir, bin
+}
+
+func TestVerifyVenvBridgeResolvesCommand(t *testing.T) {
+	dir, bin := venvFixture(t, "pytest")
+	r := &seqRunner{codes: []int{0}}
+	h := Harness{Runner: r, Command: []string{"pytest", "-q"}, VenvDir: ".venv"}
+	if _, err := h.Verify(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+	c := r.calls[0]
+	// The bare program name must be replaced with the venv's executable: the
+	// OS resolves bare names against the parent's PATH, so the injected PATH
+	// alone could not redirect the command itself.
+	if want := filepath.Join(bin, "pytest"); c.Name != want {
+		t.Errorf("Name = %q, want %q", c.Name, want)
+	}
+	if c.Args[0] != "-q" {
+		t.Errorf("Args = %v", c.Args)
+	}
+	wantVenv := "VIRTUAL_ENV=" + filepath.Join(dir, ".venv")
+	wantPath := "PATH=" + bin + string(os.PathListSeparator)
+	if len(c.ExtraEnv) != 2 || c.ExtraEnv[0] != wantVenv || !strings.HasPrefix(c.ExtraEnv[1], wantPath) {
+		t.Errorf("ExtraEnv = %v, want [%s %s...]", c.ExtraEnv, wantVenv, wantPath)
+	}
+}
+
+func TestVerifyVenvBridgeFallsBackToPATH(t *testing.T) {
+	// A program the venv does not provide (e.g. make) keeps its bare name for
+	// the normal PATH lookup, but still gets the venv environment so any
+	// python it spawns resolves inside the venv.
+	dir, _ := venvFixture(t)
+	r := &seqRunner{codes: []int{0}}
+	h := Harness{Runner: r, Command: []string{"make", "check"}, VenvDir: ".venv"}
+	if _, err := h.Verify(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+	c := r.calls[0]
+	if c.Name != "make" {
+		t.Errorf("Name = %q, want bare make", c.Name)
+	}
+	if len(c.ExtraEnv) != 2 {
+		t.Errorf("ExtraEnv = %v, want VIRTUAL_ENV and PATH", c.ExtraEnv)
+	}
+}
+
+func TestVerifyVenvBridgeKeepsExplicitPaths(t *testing.T) {
+	// A command already given as a path is the user's explicit choice; only
+	// the environment is exported.
+	dir, _ := venvFixture(t, "python")
+	r := &seqRunner{codes: []int{0}}
+	h := Harness{Runner: r, Command: []string{"./scripts/check.sh"}, VenvDir: ".venv"}
+	if _, err := h.Verify(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+	if c := r.calls[0]; c.Name != "./scripts/check.sh" {
+		t.Errorf("Name = %q, want the explicit path untouched", c.Name)
+	}
+}
+
+func TestVerifyWithoutVenvDirInjectsNothing(t *testing.T) {
+	r := &seqRunner{codes: []int{0}}
+	h := Harness{Runner: r, Command: []string{"python", "check.py"}}
+	if _, err := h.Verify(context.Background(), t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	c := r.calls[0]
+	if c.Name != "python" || len(c.ExtraEnv) != 0 {
+		t.Errorf("cmd = %+v, want untouched name and no ExtraEnv", c)
 	}
 }

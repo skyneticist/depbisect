@@ -17,14 +17,14 @@ import (
 )
 
 func TestManagerValid(t *testing.T) {
-	valid := []Manager{NPM, PNPM, YARN, CARGO, GO, UV, COMPOSER}
+	valid := []Manager{NPM, PNPM, YARN, CARGO, GO, UV, COMPOSER, PIP}
 	for _, m := range valid {
 		if !m.Valid() {
 			t.Errorf("Manager(%q).Valid() = false, want true", m)
 		}
 	}
 	// Zero value and unknown strings must be invalid.
-	for _, bad := range []Manager{"", "bun", "pip"} {
+	for _, bad := range []Manager{"", "bun", "poetry"} {
 		if bad.Valid() {
 			t.Errorf("Manager(%q).Valid() = true, want false", bad)
 		}
@@ -56,6 +56,7 @@ func TestDetect(t *testing.T) {
 		{name: "go override", override: "go", want: GO},
 		{name: "uv override", override: "uv", want: UV},
 		{name: "composer override", override: "composer", want: COMPOSER},
+		{name: "pip override", override: "pip", want: PIP},
 		{name: "bad override", override: "bun", wantErrPart: "bun"},
 	}
 	for _, tc := range cases {
@@ -81,7 +82,7 @@ func TestLockfileNames(t *testing.T) {
 	if NPM.LockfileName() != "package-lock.json" || PNPM.LockfileName() != "pnpm-lock.yaml" ||
 		YARN.LockfileName() != "yarn.lock" || CARGO.LockfileName() != "Cargo.lock" ||
 		GO.LockfileName() != "go.sum" || UV.LockfileName() != "uv.lock" ||
-		COMPOSER.LockfileName() != "composer.lock" {
+		COMPOSER.LockfileName() != "composer.lock" || PIP.LockfileName() != "requirements.txt" {
 		t.Error("wrong lockfile names")
 	}
 }
@@ -90,8 +91,19 @@ func TestManifestNames(t *testing.T) {
 	if NPM.ManifestName() != "package.json" || PNPM.ManifestName() != "package.json" ||
 		YARN.ManifestName() != "package.json" || CARGO.ManifestName() != "Cargo.toml" ||
 		GO.ManifestName() != "go.mod" || UV.ManifestName() != "pyproject.toml" ||
-		COMPOSER.ManifestName() != "composer.json" {
+		COMPOSER.ManifestName() != "composer.json" || PIP.ManifestName() != "requirements.txt" {
 		t.Error("wrong manifest names")
+	}
+}
+
+func TestVenvDir(t *testing.T) {
+	if PIP.VenvDir() != ".venv" {
+		t.Errorf("PIP.VenvDir() = %q, want .venv", PIP.VenvDir())
+	}
+	for _, m := range []Manager{NPM, PNPM, YARN, CARGO, GO, UV, COMPOSER} {
+		if m.VenvDir() != "" {
+			t.Errorf("%s.VenvDir() = %q, want empty", m, m.VenvDir())
+		}
 	}
 }
 
@@ -200,6 +212,42 @@ func TestInstallInvocation(t *testing.T) {
 		}
 		if !c.AllowTrustedBatch {
 			t.Error("uv invocation must set AllowTrustedBatch for Windows batch shims")
+		}
+	})
+
+	t.Run("pip", func(t *testing.T) {
+		dir := t.TempDir()
+		fake := execx.NewFake()
+		if _, err := (Installer{Runner: fake, Manager: PIP, LookPath: found}).Install(context.Background(), dir, nil); err != nil {
+			t.Fatal(err)
+		}
+		calls := fake.Calls()
+		if len(calls) != 2 {
+			t.Fatalf("pip install ran %d commands, want venv creation then pip install", len(calls))
+		}
+		// Step 1 creates the trial venv with the preferred host interpreter,
+		// without bootstrapping a per-venv pip (the host pip targets it).
+		venv := calls[0]
+		if want := "/bin/" + pythonCandidates()[0]; venv.Name != want || venv.Dir != dir {
+			t.Errorf("venv cmd = %+v, want name=%s dir=%s", venv, want, dir)
+		}
+		if !reflect.DeepEqual(venv.Args, []string{"-m", "venv", "--without-pip", ".venv"}) {
+			t.Errorf("venv args = %v", venv.Args)
+		}
+		// Step 2 installs with the host pip redirected into the venv; the
+		// candidate requirements.txt must be re-resolved without prompts.
+		install := calls[1]
+		wantArgs := []string{"--python", pipVenvPython(), "install",
+			"--requirement", "requirements.txt", "--no-input",
+			"--disable-pip-version-check", "--progress-bar", "off"}
+		if install.Name != "pip" || !reflect.DeepEqual(install.Args, wantArgs) {
+			t.Errorf("pip cmd = %+v, want name=pip args=%v", install, wantArgs)
+		}
+		if !venv.AllowTrustedBatch || !install.AllowTrustedBatch {
+			t.Error("pip invocations must set AllowTrustedBatch for Windows batch shims")
+		}
+		if len(install.ExtraEnv) != 0 {
+			t.Errorf("pip must not inject extra env, got %v", install.ExtraEnv)
 		}
 	})
 
@@ -635,6 +683,108 @@ func TestVersionUv(t *testing.T) {
 	}
 }
 
+func TestVersionPip(t *testing.T) {
+	// `pip --version` prints "pip x.y from <path> (python x.y)"; the leading
+	// "pip" must not be doubled.
+	fake := execx.NewFake()
+	fake.Default.Result = execx.Result{Stdout: []byte("pip 24.2 from /usr/lib/python3.12/site-packages/pip (python 3.12)\n")}
+	inst := Installer{Runner: fake, Manager: PIP, LookPath: found}
+	id, err := inst.Version(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "pip 24.2 from /usr/lib/python3.12/site-packages/pip (python 3.12)" {
+		t.Errorf("identity = %q, want unprefixed pip version", id)
+	}
+	if call := fake.Calls()[0]; !reflect.DeepEqual(call.Args, []string{"--version"}) {
+		t.Errorf("version args = %v, want [--version]", call.Args)
+	}
+}
+
+func TestVersionPipRequiresPython(t *testing.T) {
+	// Version is the pre-flight check: with pip on PATH but no Python
+	// interpreter for the per-trial virtual environments, it must fail before
+	// any trial does, without even running pip.
+	pipOnly := func(name string) (string, error) {
+		if name == "pip" {
+			return "/bin/pip", nil
+		}
+		return "", exec.ErrNotFound
+	}
+	fake := execx.NewFake()
+	inst := Installer{Runner: fake, Manager: PIP, LookPath: pipOnly}
+	_, err := inst.Version(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "Python interpreter") {
+		t.Fatalf("err = %v, want missing-interpreter error", err)
+	}
+	if len(fake.Calls()) != 0 {
+		t.Errorf("Version ran %d commands despite failed pre-flight", len(fake.Calls()))
+	}
+}
+
+func TestPipInstallVenvCreationFails(t *testing.T) {
+	// A venv creation failure is environmental, not a property of the
+	// candidate: Install must return an error (failing the whole run with the
+	// tool's message) instead of a nonzero Result that would mark the trial
+	// unresolved, and it must not go on to run pip.
+	dir := t.TempDir()
+	fake := execx.NewFake()
+	fake.Stub(func(c execx.Cmd) bool { return len(c.Args) > 1 && c.Args[1] == "venv" },
+		execx.Response{Result: execx.Result{
+			ExitCode: 1,
+			// venv reports ensurepip failures on stdout; the error must still
+			// carry them when stderr is empty.
+			Stdout: []byte("The virtual environment was not created successfully because ensurepip is not available\n"),
+		}})
+	_, err := (Installer{Runner: fake, Manager: PIP, LookPath: found}).Install(context.Background(), dir, nil)
+	if err == nil || !strings.Contains(err.Error(), "virtual environment") {
+		t.Fatalf("err = %v, want virtual-environment creation failure", err)
+	}
+	if !strings.Contains(err.Error(), "ensurepip is not available") {
+		t.Errorf("err = %v, want the tool's stdout detail included", err)
+	}
+	if n := len(fake.Calls()); n != 1 {
+		t.Errorf("ran %d commands, want only the failed venv creation", n)
+	}
+}
+
+func TestPipInstallFallsBackToSecondInterpreter(t *testing.T) {
+	// When the preferred interpreter name is absent, the next candidate is
+	// used for venv creation.
+	second := pythonCandidates()[1]
+	onlySecond := func(name string) (string, error) {
+		if name == "pip" || name == second {
+			return "/bin/" + name, nil
+		}
+		return "", exec.ErrNotFound
+	}
+	dir := t.TempDir()
+	fake := execx.NewFake()
+	if _, err := (Installer{Runner: fake, Manager: PIP, LookPath: onlySecond}).Install(context.Background(), dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if venv := fake.Calls()[0]; venv.Name != "/bin/"+second {
+		t.Errorf("venv interpreter = %q, want fallback /bin/%s", venv.Name, second)
+	}
+}
+
+func TestPipInstallRequiresPython(t *testing.T) {
+	pipOnly := func(name string) (string, error) {
+		if name == "pip" {
+			return "/bin/pip", nil
+		}
+		return "", exec.ErrNotFound
+	}
+	fake := execx.NewFake()
+	_, err := (Installer{Runner: fake, Manager: PIP, LookPath: pipOnly}).Install(context.Background(), t.TempDir(), nil)
+	if err == nil || !strings.Contains(err.Error(), "Python interpreter") {
+		t.Fatalf("err = %v, want missing-interpreter error", err)
+	}
+	if len(fake.Calls()) != 0 {
+		t.Errorf("Install ran %d commands without an interpreter", len(fake.Calls()))
+	}
+}
+
 // TestGoInstallReconcilesGoSumZipChecksums is a real-toolchain regression test
 // for the gap that `go mod download all` closes. When a candidate reverts a
 // dependency, the worktree's go.sum lacks that version's module-zip checksum;
@@ -735,11 +885,13 @@ func TestDependencyFiles(t *testing.T) {
 		"Cargo.toml", "Cargo.lock", "go.mod", "go.sum",
 		"pyproject.toml", "uv.lock",
 		"composer.json", "composer.lock",
+		"requirements.txt",
 	}
 	if !reflect.DeepEqual(files, want) {
 		t.Errorf("DependencyFiles() = %v, want %v", files, want)
 	}
-	// package.json is shared by npm and pnpm; it must appear exactly once.
+	// package.json is shared by npm and pnpm, and requirements.txt is pip's
+	// manifest and lockfile at once; each must appear exactly once.
 	seen := make(map[string]int)
 	for _, f := range files {
 		seen[f]++

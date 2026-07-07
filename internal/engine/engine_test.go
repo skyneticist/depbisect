@@ -204,6 +204,19 @@ func readDeps(t testing.TB, dir string) map[string]string {
 		}
 		return deps
 	}
+	if data, err := os.ReadFile(filepath.Join(dir, "requirements.txt")); err == nil {
+		r, err := manifest.ParseRequirements(data)
+		if err != nil {
+			t.Fatalf("parse candidate requirements.txt: %v", err)
+		}
+		deps := map[string]string{}
+		for _, sec := range r.Sections {
+			for k, v := range sec {
+				deps[k] = v
+			}
+		}
+		return deps
+	}
 	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
 	if err != nil {
 		t.Fatalf("read candidate manifest: %v", err)
@@ -417,7 +430,7 @@ func newEnv(t *testing.T, git *fakeGit, failWhen func(map[string]string) bool, r
 	env.eng = &Engine{
 		Git:          git,
 		NewInstaller: func(m pm.Manager) Installer { return env.installer },
-		Verifier:     env.verifier,
+		NewVerifier:  func(m pm.Manager) Verifier { return env.verifier },
 		Now:          func() time.Time { return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC) },
 		MkdirTemp: func() (string, error) {
 			d := filepath.Join(t.TempDir(), fmt.Sprintf("depbisect-%d", len(env.tempDirs)))
@@ -772,6 +785,48 @@ func TestRunFindsSingleCulpritComposer(t *testing.T) {
 	}
 	if res.Minimal[0].OldResolved != "3.0.0" || res.Minimal[0].NewResolved != "3.2.0" {
 		t.Errorf("resolved versions not annotated from composer.lock: %+v", res.Minimal[0])
+	}
+}
+
+func threeChangePipRepo() *fakeGit {
+	const baseReq = "# app pins\n--no-index\nalpha==1.0.0\nbeta==3.0.0\ngamma==5.0.0\n"
+	const headReq = "# app pins\n--no-index\nalpha==1.1.0\nbeta==3.2.0\ngamma==5.5.0\n"
+	return &fakeGit{
+		revs: map[string]string{"base": "sha-base", "HEAD": "sha-head"},
+		files: map[string]map[string]string{
+			"sha-base": {"requirements.txt": baseReq},
+			"sha-head": {"requirements.txt": headReq},
+		},
+	}
+}
+
+// TestRunFindsSingleCulpritPip exercises the whole engine over a pip repo:
+// requirements.txt auto-detection, line diff/render, and resolved-version
+// annotation from the file's own exact pins (pip has no separate lockfile).
+func TestRunFindsSingleCulpritPip(t *testing.T) {
+	env := newEnv(t, threeChangePipRepo(), func(deps map[string]string) bool {
+		return deps["beta"] == "==3.2.0"
+	}, 3)
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeMinimalFound {
+		t.Fatalf("outcome = %q, diagnostics %v", res.Outcome, res.Diagnostics)
+	}
+	if res.PackageManager != "pip" {
+		t.Errorf("pm = %q, want pip", res.PackageManager)
+	}
+	if got := minimalNames(res); ids(got) != "beta" {
+		t.Errorf("minimal = %v, want [beta]", got)
+	}
+	if res.Minimal[0].OldResolved != "3.0.0" || res.Minimal[0].NewResolved != "3.2.0" {
+		t.Errorf("resolved versions not annotated from the requirements pins: %+v", res.Minimal[0])
+	}
+	// Pins derive from the specs themselves, so pip can never report
+	// lockfile-only drift.
+	if len(res.LockfileOnly) != 0 {
+		t.Errorf("LockfileOnly = %v, want none for pip", res.LockfileOnly)
 	}
 }
 
@@ -1280,6 +1335,29 @@ func TestRunDirtyYarnLockWarnsOnNpmRepo(t *testing.T) {
 	}
 }
 
+func TestRunDirtyRequirementsWarnsOnce(t *testing.T) {
+	// requirements.txt is pip's manifest and lockfile at once; a dirty copy
+	// must produce a single warning, not one per role.
+	git := threeChangePipRepo()
+	git.dirty = map[string]bool{"requirements.txt": true}
+	env := newEnv(t, git, func(deps map[string]string) bool {
+		return deps["beta"] == "==3.2.0"
+	}, 1)
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var warnings int
+	for _, d := range res.Diagnostics {
+		if strings.Contains(d, "uncommitted") && strings.Contains(d, "requirements.txt") {
+			warnings++
+		}
+	}
+	if warnings != 1 {
+		t.Errorf("dirty requirements.txt warned %d times, want exactly once: %v", warnings, res.Diagnostics)
+	}
+}
+
 func TestRunZeroChangesWithDirtyManifestStillWarns(t *testing.T) {
 	// A user whose uncommitted package.json edits are the only difference
 	// gets "no changes" — the dirty warning is essential context there.
@@ -1328,7 +1406,7 @@ func TestRunResumesCompletedTrialsFromCheckpoint(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	first := newEnv(t, threeChangeRepo(), nil, 1)
 	first.eng.Progress = &recordingProgress{}
-	first.eng.Verifier = first.verifier
+	first.eng.NewVerifier = func(m pm.Manager) Verifier { return first.verifier }
 	first.verifier.failWhen = func(deps map[string]string) bool {
 		if first.verifier.calls == 3 {
 			cancel()
@@ -2107,6 +2185,71 @@ func TestRunPyprojectWithoutUvLockFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "pyproject.toml") || !strings.Contains(err.Error(), "uv.lock") {
 		t.Errorf("err = %v, want mention of pyproject.toml and uv.lock", err)
+	}
+}
+
+// TestRunPythonFamilyDetection covers the Python detection rules: uv.lock
+// marks a uv project even when a requirements.txt export sits next to it, a
+// pyproject.toml without uv.lock falls back to pip when requirements.txt
+// exists, and a plain requirements.txt selects pip. Dry runs stop after
+// detection and diff, which is all these cases assert.
+func TestRunPythonFamilyDetection(t *testing.T) {
+	const reqs = "alpha==1.0.0\nbeta==3.0.0\ngamma==5.0.0\n"
+	cases := []struct {
+		name   string
+		git    *fakeGit
+		wantPM string
+	}{
+		{name: "requirements.txt alone", git: threeChangePipRepo(), wantPM: "pip"},
+		{
+			name: "uv.lock wins over requirements.txt",
+			git: func() *fakeGit {
+				g := threeChangePythonRepo()
+				g.files["sha-base"]["requirements.txt"] = reqs
+				g.files["sha-head"]["requirements.txt"] = reqs
+				return g
+			}(),
+			wantPM: "uv",
+		},
+		{
+			name: "pyproject.toml without uv.lock falls back to pip",
+			git: func() *fakeGit {
+				g := threeChangePipRepo()
+				const py = "[project]\nname = \"app\"\n"
+				g.files["sha-base"]["pyproject.toml"] = py
+				g.files["sha-head"]["pyproject.toml"] = py
+				return g
+			}(),
+			wantPM: "pip",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newEnv(t, tc.git, nil, 1)
+			opts := baseOpts()
+			opts.DryRun = true
+			res, err := env.eng.Run(context.Background(), opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.PackageManager != tc.wantPM {
+				t.Errorf("pm = %q, want %q", res.PackageManager, tc.wantPM)
+			}
+		})
+	}
+}
+
+func TestRunPackageJSONAndRequirementsAmbiguous(t *testing.T) {
+	// requirements.txt joins the cross-ecosystem ambiguity check like any
+	// other manifest; only its coexistence with pyproject.toml is special.
+	env := newEnv(t, threeChangePipRepo(), nil, 1)
+	env.git.files["sha-head"]["package.json"] = `{"dependencies":{"a":"1.0.0"}}`
+	_, err := env.eng.Run(context.Background(), baseOpts())
+	if err == nil || !strings.Contains(err.Error(), "--pm") {
+		t.Fatalf("err = %v, want ambiguous-manifest error suggesting --pm", err)
+	}
+	if !strings.Contains(err.Error(), "requirements.txt") || !strings.Contains(err.Error(), "package.json") {
+		t.Errorf("err = %v, want both manifests listed", err)
 	}
 }
 
