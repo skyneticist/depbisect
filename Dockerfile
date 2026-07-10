@@ -80,7 +80,7 @@ CMD ["help"]
 # php:cli is Debian (glibc). composer is a PHAR copied from its official image
 # (keeping the pin visible to dependabot); unzip lets composer extract package
 # dist archives without relying on the php zip extension.
-FROM php:8.3-cli-bookworm AS php
+FROM php:8.5-cli-bookworm AS php
 RUN apt-get update \
  && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends git ca-certificates unzip \
