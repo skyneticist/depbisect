@@ -73,6 +73,7 @@
     "failures": 3,
     "runs": 3
   },
+  "failureExcerpt": "  ✗ parser suite > trailing commas\nAssertionError: expected value to parse, got SyntaxError",
   "minimalityProven": true,
   "unresolvedTrials": 0,
   "resumedTrials": 0,

@@ -41,6 +41,7 @@ func fixtureResult() *engine.Result {
 			{Name: "beta", Section: manifest.Dependencies, Kind: manifest.Updated, OldSpec: "3.0.0", NewSpec: "3.2.0", OldResolved: "3.0.0", NewResolved: "3.2.0"},
 		},
 		Confidence:       engine.Confidence{Failures: 3, Runs: 3},
+		FailureExcerpt:   "  ✗ parser suite > trailing commas\nAssertionError: expected value to parse, got SyntaxError",
 		MinimalityProven: true,
 		Diagnostics:      []string{"1 dependencies changed only in the lockfile (version spec unchanged): transit (4.0.1 -> 4.9.0)."},
 		Trials: []engine.Trial{

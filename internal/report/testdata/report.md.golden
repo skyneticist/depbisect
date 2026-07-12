@@ -25,6 +25,11 @@
 
 Reproduced 3/3 times.
 
+## Failure evidence
+
+      ✗ parser suite > trailing commas
+    AssertionError: expected value to parse, got SyntaxError
+
 ## Dependency changes (3)
 
 | Dependency | Section | Change | Old | New |
@@ -33,7 +38,7 @@ Reproduced 3/3 times.
 | beta | dependencies | updated | 3.0.0 (3.0.0) | 3.2.0 (3.2.0) |
 | tool | devDependencies | added | — | 2.0.0 (2.0.0) |
 
-## Lockfile-only changes (1, not bisectable)
+## Lockfile-only changes (1, not bisected)
 
 | Dependency | Spec | Old resolved | New resolved |
 |---|---|---|---|
