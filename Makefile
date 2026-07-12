@@ -211,6 +211,12 @@ demo-python-lockonly: build ## Python (uv): bisect a lockfile-only refresh (pypr
 	$(call demo_setup,make-demo-python-lockonly.sh)
 	$(call demo_run,$(BINARY) run --repo examples/demo-python-lockonly/app --base HEAD~1 --runs 3 -- uv run -- python check.py)
 
+.PHONY: demo-python-realworld
+demo-python-realworld: export UV_PYTHON_PREFERENCE = only-system
+demo-python-realworld: build ## Python (uv): real PyPI packages, NumPy 2.0 culprit. NEEDS NETWORK; not in CI.
+	$(call demo_setup,make-demo-python-realworld.sh)
+	$(call demo_run,$(BINARY) run --repo examples/demo-python-realworld/app --base HEAD~1 --runs 3 -- uv run -- python check.py)
+
 .PHONY: demo-composer
 demo-composer: build ## PHP (composer): bisect the offline example repo (culprit: breakage).
 	$(call demo_setup,make-demo-composer.sh)
