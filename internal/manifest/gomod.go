@@ -68,6 +68,9 @@ func ParseGoMod(data []byte) (*GoMod, error) {
 // one; the engine probes for go.work directly.
 func (g *GoMod) HasWorkspaceLayout() bool { return false }
 
+// ProjectName implements Parsed; the module path is what go.sum entries key on.
+func (g *GoMod) ProjectName() string { return g.Name }
+
 // DiffGo computes the direct dependency changes from old to new, using the
 // shared section diff over go.mod's require directives.
 func DiffGo(old, new *GoMod) []Change {

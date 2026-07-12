@@ -6,6 +6,10 @@ import "fmt"
 // engine holds manifests through this interface so it never references a
 // concrete manifest type.
 type Parsed interface {
+	// ProjectName returns the manifest's own package name as it would appear
+	// among the ecosystem's lockfile entries ("" when the manifest carries
+	// none), so lockfile scans can exclude the root project.
+	ProjectName() string
 	// HasWorkspaceLayout reports a multi-package workspace, which DepBisect
 	// does not yet support.
 	HasWorkspaceLayout() bool
@@ -30,6 +34,12 @@ type Ecosystem interface {
 	// LockfileOnly returns dependencies whose spec is unchanged but whose
 	// resolved version differs between revisions.
 	LockfileOnly(old, new Parsed, oldR, newR Resolved) []LockfileChange
+	// PinChanges synthesizes bisectable changes from lockfile-only drift by
+	// pinning each old resolution as an exact version spec (see pins.go).
+	// Entries that cannot be pinned faithfully are skipped. Ecosystems where
+	// such drift cannot occur (go: MVS specs are the resolution; pip:
+	// requirements.txt is its own lockfile) return nil.
+	PinChanges(lcs []LockfileChange) []Change
 }
 
 // EcosystemFor returns the Ecosystem for a package manager. The manager keys
@@ -62,8 +72,14 @@ func EcosystemFor(manager string) (Ecosystem, error) {
 // HasWorkspaceLayout implements Parsed.
 func (p *PackageJSON) HasWorkspaceLayout() bool { return p.HasWorkspaces }
 
+// ProjectName implements Parsed.
+func (p *PackageJSON) ProjectName() string { return p.Name }
+
 // HasWorkspaceLayout implements Parsed.
 func (c *CargoToml) HasWorkspaceLayout() bool { return c.HasWorkspace }
+
+// ProjectName implements Parsed.
+func (c *CargoToml) ProjectName() string { return c.Name }
 
 // jsEcosystem handles package.json manifests for npm, pnpm, and yarn; only
 // the lockfile parser differs among them.
@@ -93,6 +109,8 @@ func (jsEcosystem) LockfileOnly(old, new Parsed, oldR, newR Resolved) []Lockfile
 	return LockfileOnly(old.(*PackageJSON), new.(*PackageJSON), oldR, newR)
 }
 
+func (jsEcosystem) PinChanges(lcs []LockfileChange) []Change { return pinChanges(lcs, jsPin) }
+
 // cargoEcosystem handles Cargo.toml manifests for Rust.
 type cargoEcosystem struct{}
 
@@ -117,6 +135,8 @@ func (cargoEcosystem) Render(to Parsed, changes []Change, applied map[string]boo
 func (cargoEcosystem) LockfileOnly(old, new Parsed, oldR, newR Resolved) []LockfileChange {
 	return LockfileOnlyCargo(old.(*CargoToml), new.(*CargoToml), oldR, newR)
 }
+
+func (cargoEcosystem) PinChanges(lcs []LockfileChange) []Change { return pinChanges(lcs, cargoPin) }
 
 // goEcosystem handles go.mod manifests for Go modules.
 type goEcosystem struct{}
@@ -143,6 +163,10 @@ func (goEcosystem) LockfileOnly(old, new Parsed, oldR, newR Resolved) []Lockfile
 	return LockfileOnlyGo(old.(*GoMod), new.(*GoMod), oldR, newR)
 }
 
+// PinChanges returns nil: under minimal version selection the go.mod spec is
+// the resolution, so lockfile-only drift cannot occur (see LockfileOnlyGo).
+func (goEcosystem) PinChanges([]LockfileChange) []Change { return nil }
+
 // pyEcosystem handles pyproject.toml manifests for the uv package manager.
 type pyEcosystem struct{}
 
@@ -167,6 +191,8 @@ func (pyEcosystem) Render(to Parsed, changes []Change, applied map[string]bool) 
 func (pyEcosystem) LockfileOnly(old, new Parsed, oldR, newR Resolved) []LockfileChange {
 	return LockfileOnlyPyproject(old.(*PyProject), new.(*PyProject), oldR, newR)
 }
+
+func (pyEcosystem) PinChanges(lcs []LockfileChange) []Change { return pinChanges(lcs, pyPin) }
 
 // pipEcosystem handles requirements.txt manifests for the pip package
 // manager. requirements.txt is also its own "lockfile": exact pins stand in
@@ -195,6 +221,10 @@ func (pipEcosystem) LockfileOnly(old, new Parsed, oldR, newR Resolved) []Lockfil
 	return LockfileOnlyRequirements(old.(*Requirements), new.(*Requirements), oldR, newR)
 }
 
+// PinChanges returns nil: requirements.txt is its own lockfile, so
+// LockfileOnlyRequirements is provably empty and there is nothing to pin.
+func (pipEcosystem) PinChanges([]LockfileChange) []Change { return nil }
+
 // composerEcosystem handles composer.json manifests for PHP.
 type composerEcosystem struct{}
 
@@ -218,4 +248,8 @@ func (composerEcosystem) Render(to Parsed, changes []Change, applied map[string]
 
 func (composerEcosystem) LockfileOnly(old, new Parsed, oldR, newR Resolved) []LockfileChange {
 	return LockfileOnlyComposer(old.(*ComposerJSON), new.(*ComposerJSON), oldR, newR)
+}
+
+func (composerEcosystem) PinChanges(lcs []LockfileChange) []Change {
+	return pinChanges(lcs, composerPin)
 }
