@@ -81,6 +81,10 @@ type Options struct {
 	PMOverride    string
 	KeepWorktrees bool
 	DryRun        bool
+	// NoLockfilePins disables bisecting lockfile-only changes through
+	// synthesized exact version pins; such changes are then only reported as
+	// diagnostics, as before the pinning feature existed.
+	NoLockfilePins bool
 	// Stream, when non-nil, receives live install/verify output.
 	Stream io.Writer
 	// Checkpoint persists completed trials. Resume reuses a matching
@@ -111,6 +115,11 @@ type Trial struct {
 	Outcome      string
 	RunsExecuted int
 	Failures     int
+	// FailureExcerpt is the tail of the failing verification output for this
+	// trial ("" for passing or unresolved trials), size-capped by the verify
+	// package. It rides through the checkpoint so resumed runs keep their
+	// evidence.
+	FailureExcerpt string `json:",omitempty"`
 	// Phase timings are wall-clock durations for completed work in this trial.
 	PrepareDuration time.Duration
 	InstallDuration time.Duration
@@ -177,15 +186,19 @@ type Result struct {
 	LockfileOnly          []manifest.LockfileChange
 	Minimal               []manifest.Change
 	Confidence            Confidence
-	MinimalityProven      bool
-	UnresolvedTrials      int
-	ResumedTrials         int
-	Diagnostics           []string
-	Trials                []Trial
-	StartedAt             time.Time
-	FinishedAt            time.Time
-	CleanupDuration       time.Duration
-	KeptWorktree          string
+	// FailureExcerpt is the tail of the verification output from the trial
+	// that convicted the final failing set (or, for fails-without-updates,
+	// from the failing all-reverted baseline): the symptom behind the verdict.
+	FailureExcerpt   string
+	MinimalityProven bool
+	UnresolvedTrials int
+	ResumedTrials    int
+	Diagnostics      []string
+	Trials           []Trial
+	StartedAt        time.Time
+	FinishedAt       time.Time
+	CleanupDuration  time.Duration
+	KeptWorktree     string
 }
 
 // Engine wires the collaborators together.
@@ -330,20 +343,60 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	oldResolved := e.readLockfile(ctx, eco, manager.LockfileName(), baseSHA, opts.BaseRev, res)
 	newResolved := e.readLockfile(ctx, eco, manager.LockfileName(), toSHA, opts.ToRev, res)
 
-	// Phase 4: diff.
+	// Phase 4: diff. Lockfile-only drift (spec unchanged, resolution moved)
+	// becomes bisectable through synthesized exact version pins; entries no
+	// ecosystem can pin faithfully stay behind as diagnostics.
 	changes := eco.Diff(basePkg, toPkg)
+	lockOnly := eco.LockfileOnly(basePkg, toPkg, oldResolved, newResolved)
+	pinned := 0
+	if len(lockOnly) > 0 && !opts.NoLockfilePins {
+		if pins := eco.PinChanges(lockOnly); len(pins) > 0 {
+			pinnedIDs := make(map[string]bool, len(pins))
+			for _, p := range pins {
+				pinnedIDs[p.ID()] = true
+			}
+			remainder := lockOnly[:0]
+			for _, lc := range lockOnly {
+				if !pinnedIDs[lc.ID()] {
+					remainder = append(remainder, lc)
+				}
+			}
+			lockOnly = remainder
+			changes = append(changes, pins...)
+			manifest.SortChanges(changes)
+			pinned = len(pins)
+		}
+	}
 	manifest.AnnotateResolved(changes, oldResolved, newResolved)
 	res.Changes = changes
-	res.LockfileOnly = eco.LockfileOnly(basePkg, toPkg, oldResolved, newResolved)
+	res.LockfileOnly = lockOnly
 	if n := len(res.LockfileOnly); n > 0 {
+		reason := "DepBisect bisects manifest-level changes and cannot isolate these"
+		if !opts.NoLockfilePins {
+			reason = "these resolutions cannot be pinned to an exact registry version"
+		}
 		res.Diagnostics = append(res.Diagnostics, fmt.Sprintf(
-			"%s changed only in the lockfile (version spec unchanged): %s. "+
-				"DepBisect bisects manifest-level changes and cannot isolate these; "+
+			"%s changed only in the lockfile (version spec unchanged): %s. %s; "+
 				"if the culprit is among them, results may be incomplete.",
-			pluralize(n, "dependency", "dependencies"), lockfileOnlyNames(res.LockfileOnly)))
+			pluralize(n, "dependency", "dependencies"), lockfileOnlyNames(res.LockfileOnly), reason))
 	}
-	progress.Step("Changes", "%s",
-		pluralize(len(changes), "direct dependency change", "direct dependency changes"))
+	// go.sum is a hash allowlist rather than a resolution record (it keeps
+	// entries for versions no longer used), so transitive drift is only
+	// meaningful for ecosystems with a real lockfile.
+	if manager != pm.GO {
+		if drift := transitiveDrift(basePkg, toPkg, oldResolved, newResolved, changes, lockOnly); len(drift) > 0 {
+			res.Diagnostics = append(res.Diagnostics, fmt.Sprintf(
+				"%s resolved differently between the two revisions without any direct dependency changing: %s. "+
+					"DepBisect bisects direct dependencies only; if the culprit is among these transitive changes, "+
+					"results may be incomplete.",
+				pluralize(len(drift), "transitive dependency", "transitive dependencies"), lockfileOnlyNames(drift)))
+		}
+	}
+	summary := pluralize(len(changes), "direct dependency change", "direct dependency changes")
+	if pinned > 0 {
+		summary += fmt.Sprintf(" (%d lockfile-only, bisected via exact version pins)", pinned)
+	}
+	progress.Step("Changes", "%s", summary)
 
 	e.warnDirty(ctx, manager, res)
 
@@ -490,6 +543,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 	if oldTrial.Failures == oldTrial.RunsExecuted && oldTrial.Failures > 0 {
 		res.Outcome = OutcomeFailsAtBase
+		res.FailureExcerpt = oldTrial.FailureExcerpt
 		res.OutcomeDetail = fmt.Sprintf(
 			"the command failed %d/%d runs with all dependency updates reverted; "+
 				"the cause is likely not a direct dependency update from this range",
@@ -559,6 +613,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	res.Minimal = bestKnown
 	final := ex.lookup(bestKnown)
 	res.Confidence = Confidence{Failures: final.Failures, Runs: final.RunsExecuted}
+	res.FailureExcerpt = final.FailureExcerpt
 	for _, trial := range res.Trials {
 		if trial.Outcome == "unresolved" {
 			res.UnresolvedTrials++
@@ -886,6 +941,35 @@ func subsetKeyIDs(ids []string) string {
 	return strings.Join(sorted, "\x00")
 }
 
+// transitiveDrift lists packages resolved differently between the two
+// revisions that correspond to no direct dependency change: transitive
+// resolution drift, which no manifest edit can bisect. The root project's own
+// lockfile entry (cargo and uv record one) is excluded, as are packages
+// present in only one lockfile — added or dropped transitives ride along with
+// whichever change introduced them.
+func transitiveDrift(basePkg, toPkg manifest.Parsed, oldR, newR manifest.Resolved,
+	changes []manifest.Change, lockOnly []manifest.LockfileChange) []manifest.LockfileChange {
+	direct := map[string]bool{basePkg.ProjectName(): true, toPkg.ProjectName(): true}
+	for _, c := range changes {
+		direct[c.Name] = true
+	}
+	for _, lc := range lockOnly {
+		direct[lc.Name] = true
+	}
+	var out []manifest.LockfileChange
+	for name, ov := range oldR {
+		nv := newR[name]
+		if nv == "" || nv == ov || direct[name] {
+			continue
+		}
+		out = append(out, manifest.LockfileChange{Name: name, OldResolved: ov, NewResolved: nv})
+	}
+	slices.SortFunc(out, func(a, b manifest.LockfileChange) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return out
+}
+
 func lockfileOnlyNames(lcs []manifest.LockfileChange) string {
 	const maxListed = 8
 	names := make([]string, 0, maxListed+1)
@@ -894,7 +978,9 @@ func lockfileOnlyNames(lcs []manifest.LockfileChange) string {
 			names = append(names, fmt.Sprintf("and %d more", len(lcs)-maxListed))
 			break
 		}
-		names = append(names, fmt.Sprintf("%s (%s -> %s)", lc.Name, lc.OldResolved, lc.NewResolved))
+		// The version pair is one unspaced token so line wrapping in any
+		// renderer can never split a pair across lines.
+		names = append(names, fmt.Sprintf("%s (%s->%s)", lc.Name, lc.OldResolved, lc.NewResolved))
 	}
 	return strings.Join(names, ", ")
 }

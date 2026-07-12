@@ -17,11 +17,20 @@ import (
 	"github.com/skyneticist/depbisect/internal/execx"
 )
 
+// failureTailLimit caps the output evidence retained per failing run. Real
+// failure messages live at the end of output; anything past a couple of
+// kilobytes is context the report files can carry, not the terminal.
+const failureTailLimit = 2048
+
 // RunResult records one execution of the verification command.
 type RunResult struct {
 	ExitCode int
 	Duration time.Duration
 	TimedOut bool
+	// OutputTail is the end of a failing run's output — stderr when it has
+	// content, stdout otherwise — capped at failureTailLimit bytes. Passing
+	// runs carry none; it exists purely as failure evidence.
+	OutputTail string
 }
 
 // Failed reports whether this run counts as a failure.
@@ -87,6 +96,32 @@ func (v Verdict) String() string {
 		s += fmt.Sprintf(" (stopped at first pass; %d planned)", v.Planned)
 	}
 	return s
+}
+
+// FailureTail returns the captured output tail of the most recent failing
+// run, or "" when no failing run produced output. The last failure is chosen
+// because a repeated failure's final occurrence is the freshest evidence.
+func (v Verdict) FailureTail() string {
+	for i := len(v.Runs) - 1; i >= 0; i-- {
+		if v.Runs[i].Failed() && v.Runs[i].OutputTail != "" {
+			return v.Runs[i].OutputTail
+		}
+	}
+	return ""
+}
+
+// failureTail selects and caps the evidence stream of a failed run: stderr
+// when it has any non-blank content, stdout otherwise (test runners are split
+// on where they report failures).
+func failureTail(res execx.Result) string {
+	src := res.Stderr
+	if _, ok := execx.FirstLine(src); !ok {
+		src = res.Stdout
+	}
+	if len(src) > failureTailLimit {
+		src = src[len(src)-failureTailLimit:]
+	}
+	return strings.TrimRight(string(src), "\n")
 }
 
 // AllRunsTimedOut reports whether every executed run hit the per-run timeout.
@@ -175,6 +210,9 @@ func (h Harness) Verify(ctx context.Context, dir string) (Verdict, error) {
 			} else {
 				return v, fmt.Errorf("verify: %w", err)
 			}
+		}
+		if rr.Failed() {
+			rr.OutputTail = failureTail(res)
 		}
 		v.Runs = append(v.Runs, rr)
 		if rr.Failed() {

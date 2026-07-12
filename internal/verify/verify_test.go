@@ -13,11 +13,14 @@ import (
 	"github.com/skyneticist/depbisect/internal/execx"
 )
 
-// seqRunner returns scripted exit codes in sequence.
+// seqRunner returns scripted exit codes in sequence; stdout/stderr, when set,
+// are attached to every result.
 type seqRunner struct {
-	mu    sync.Mutex
-	codes []int
-	calls []execx.Cmd
+	mu     sync.Mutex
+	codes  []int
+	calls  []execx.Cmd
+	stdout string
+	stderr string
 }
 
 func (s *seqRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) {
@@ -31,7 +34,12 @@ func (s *seqRunner) Run(ctx context.Context, c execx.Cmd) (execx.Result, error) 
 	if len(s.codes) > 0 {
 		code, s.codes = s.codes[0], s.codes[1:]
 	}
-	return execx.Result{ExitCode: code, Duration: time.Millisecond}, nil
+	return execx.Result{
+		ExitCode: code,
+		Stdout:   []byte(s.stdout),
+		Stderr:   []byte(s.stderr),
+		Duration: time.Millisecond,
+	}, nil
 }
 
 func TestVerifyAlwaysFailing(t *testing.T) {
@@ -53,6 +61,54 @@ func TestVerifyAlwaysFailing(t *testing.T) {
 	// Command argv must be preserved exactly.
 	if r.calls[0].Name != "pnpm" || r.calls[0].Args[0] != "test" || r.calls[0].Dir != "/dir" {
 		t.Errorf("cmd = %+v", r.calls[0])
+	}
+}
+
+func TestVerifyFailureTail(t *testing.T) {
+	// stderr wins when it has content; failing runs carry the tail, passing
+	// runs never do.
+	r := &seqRunner{codes: []int{1, 0}, stderr: "assert blew up\n", stdout: "noise"}
+	h := Harness{Runner: r, Command: []string{"npm", "test"}, Runs: 2}
+	v, err := h.Verify(context.Background(), "/dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.FailureTail(); got != "assert blew up" {
+		t.Errorf("FailureTail = %q", got)
+	}
+	if v.Runs[1].OutputTail != "" {
+		t.Errorf("passing run must carry no tail: %+v", v.Runs[1])
+	}
+
+	// Blank stderr falls back to stdout.
+	r = &seqRunner{codes: []int{1}, stderr: " \n", stdout: "FAILED test_parse\n"}
+	h = Harness{Runner: r, Command: []string{"pytest"}}
+	if v, err = h.Verify(context.Background(), "/dir"); err != nil {
+		t.Fatal(err)
+	}
+	if got := v.FailureTail(); got != "FAILED test_parse" {
+		t.Errorf("stdout fallback FailureTail = %q", got)
+	}
+
+	// Oversized output keeps only the tail, where the evidence lives.
+	r = &seqRunner{codes: []int{1}, stderr: strings.Repeat("x", failureTailLimit) + "the actual error"}
+	h = Harness{Runner: r, Command: []string{"npm", "test"}}
+	if v, err = h.Verify(context.Background(), "/dir"); err != nil {
+		t.Fatal(err)
+	}
+	tail := v.FailureTail()
+	if len(tail) != failureTailLimit || !strings.HasSuffix(tail, "the actual error") {
+		t.Errorf("capped tail len=%d suffix ok=%v", len(tail), strings.HasSuffix(tail, "the actual error"))
+	}
+
+	// No failing runs → no tail.
+	r = &seqRunner{codes: []int{0}, stderr: "warning spam"}
+	h = Harness{Runner: r, Command: []string{"npm", "test"}}
+	if v, err = h.Verify(context.Background(), "/dir"); err != nil {
+		t.Fatal(err)
+	}
+	if got := v.FailureTail(); got != "" {
+		t.Errorf("passing verdict FailureTail = %q, want empty", got)
 	}
 }
 

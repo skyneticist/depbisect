@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -315,6 +316,9 @@ func (f *fakeVerifier) Verify(ctx context.Context, dir string, stopOnPass bool) 
 			rr.ExitCode = 0
 			rr.TimedOut = true
 		}
+		if rr.Failed() {
+			rr.OutputTail = "boom: verification failed"
+		}
 		v.Runs = append(v.Runs, rr)
 		if code != 0 {
 			v.Failures++
@@ -473,6 +477,9 @@ func TestRunFindsSingleCulprit(t *testing.T) {
 	}
 	if res.Outcome != OutcomeMinimalFound {
 		t.Fatalf("outcome = %q, diagnostics %v", res.Outcome, res.Diagnostics)
+	}
+	if res.FailureExcerpt != "boom: verification failed" {
+		t.Errorf("FailureExcerpt = %q, want the convicting trial's output tail", res.FailureExcerpt)
 	}
 	if got := minimalNames(res); ids(got) != "beta" {
 		t.Errorf("minimal = %v, want [beta]", got)
@@ -1112,12 +1119,14 @@ func TestRunZeroChanges(t *testing.T) {
 	}
 }
 
-func TestRunLockfileOnlyChangesDiagnosed(t *testing.T) {
+func TestRunLockfileOnlyChangesDiagnosedWhenPinsDisabled(t *testing.T) {
 	git := threeChangeRepo()
-	// Same specs, different resolution for alpha.
+	// Same specs, different resolutions.
 	git.files["sha-head"]["package.json"] = git.files["sha-base"]["package.json"]
 	env := newEnv(t, git, func(map[string]string) bool { return true }, 1)
-	res, err := env.eng.Run(context.Background(), baseOpts())
+	opts := baseOpts()
+	opts.NoLockfilePins = true
+	res, err := env.eng.Run(context.Background(), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1130,6 +1139,120 @@ func TestRunLockfileOnlyChangesDiagnosed(t *testing.T) {
 	joined := strings.Join(res.Diagnostics, "\n")
 	if !strings.Contains(joined, "lockfile") {
 		t.Errorf("diagnostics = %v, want lockfile-only explanation", res.Diagnostics)
+	}
+}
+
+// lockfileOnlyRepo has identical manifests at both revisions — every spec is a
+// range — while the lockfile resolutions move, so bisection is possible only
+// through synthesized pins.
+func lockfileOnlyRepo() *fakeGit {
+	pkg := `{"name":"app","dependencies":{"alpha":"^1.0.0","beta":"^3.0.0","gamma":"^5.0.0"}}`
+	return &fakeGit{
+		revs: map[string]string{"base": "sha-base", "HEAD": "sha-head"},
+		files: map[string]map[string]string{
+			"sha-base": {"package.json": pkg, "package-lock.json": lockOld},
+			"sha-head": {"package.json": pkg, "package-lock.json": lockNew},
+		},
+	}
+}
+
+func TestRunBisectsLockfileOnlyChangesViaPins(t *testing.T) {
+	// The failure reproduces whenever beta is not pinned back to 3.0.0: an
+	// applied pin keeps the manifest's own range spec, standing in for the
+	// checked-out lockfile resolving beta to the broken 3.2.0.
+	env := newEnv(t, lockfileOnlyRepo(), func(deps map[string]string) bool {
+		return deps["beta"] != "3.0.0"
+	}, 1)
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeMinimalFound {
+		t.Fatalf("outcome = %q (%s)", res.Outcome, res.OutcomeDetail)
+	}
+	if got := minimalNames(res); !slices.Equal(got, []string{"beta"}) {
+		t.Fatalf("minimal = %v", got)
+	}
+	m := res.Minimal[0]
+	if !m.LockfileOnly || m.OldSpec != "3.0.0" || m.NewSpec != "^3.0.0" {
+		t.Errorf("pin change = %+v", m)
+	}
+	if m.OldResolved != "3.0.0" || m.NewResolved != "3.2.0" {
+		t.Errorf("pin annotations = %+v", m)
+	}
+	if len(res.Changes) != 3 {
+		t.Errorf("changes = %d, want 3 pins", len(res.Changes))
+	}
+	if len(res.LockfileOnly) != 0 {
+		t.Errorf("unbisected remainder = %+v, want none", res.LockfileOnly)
+	}
+}
+
+func TestRunFindsPinnedCulpritAmongManifestChanges(t *testing.T) {
+	git := threeChangeRepo()
+	// alpha's spec no longer changes between revisions (lockfile-only drift
+	// 1.0.0 -> 1.1.0 per lockOld/lockNew); beta and gamma stay manifest-level.
+	git.files["sha-base"]["package.json"] = `{"name":"app","dependencies":{"alpha":"^1.0.0","beta":"3.0.0","gamma":"5.0.0"}}`
+	git.files["sha-head"]["package.json"] = `{"name":"app","dependencies":{"alpha":"^1.0.0","beta":"3.2.0","gamma":"5.5.0"}}`
+	env := newEnv(t, git, func(deps map[string]string) bool {
+		return deps["alpha"] != "1.0.0"
+	}, 1)
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeMinimalFound {
+		t.Fatalf("outcome = %q (%s)", res.Outcome, res.OutcomeDetail)
+	}
+	if got := minimalNames(res); !slices.Equal(got, []string{"alpha"}) {
+		t.Fatalf("minimal = %v", got)
+	}
+	if !res.Minimal[0].LockfileOnly {
+		t.Errorf("culprit should carry the lockfile-only marker: %+v", res.Minimal[0])
+	}
+	if len(res.Changes) != 3 {
+		t.Errorf("changes = %d, want 2 manifest changes + 1 pin", len(res.Changes))
+	}
+}
+
+func TestSanitizeExcerpt(t *testing.T) {
+	dir := t.TempDir()
+	sep := string(filepath.Separator)
+	got := sanitizeExcerpt("at Object.<anonymous> ("+dir+sep+"test.js:5:11)\nworktree was "+dir, dir)
+	if got != "at Object.<anonymous> (test.js:5:11)\nworktree was ." {
+		t.Errorf("sanitizeExcerpt = %q", got)
+	}
+	// Subprocesses may report the symlink-resolved form of the temp dir
+	// (macOS: /var/folders -> /private/var/folders); it is replaced too.
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil && resolved != dir {
+		if got := sanitizeExcerpt("crash in "+resolved+sep+"a.py", dir); got != "crash in a.py" {
+			t.Errorf("resolved-path sanitize = %q", got)
+		}
+	}
+	if got := sanitizeExcerpt("", dir); got != "" {
+		t.Errorf("empty excerpt should stay empty, got %q", got)
+	}
+}
+
+func TestRunTransitiveDriftDiagnosed(t *testing.T) {
+	git := threeChangeRepo()
+	git.files["sha-base"]["package-lock.json"] = strings.Replace(lockOld,
+		`"node_modules/gamma"`, `"node_modules/trans":{"version":"7.0.0"},"node_modules/gamma"`, 1)
+	git.files["sha-head"]["package-lock.json"] = strings.Replace(lockNew,
+		`"node_modules/gamma"`, `"node_modules/trans":{"version":"7.5.0"},"node_modules/gamma"`, 1)
+	env := newEnv(t, git, func(deps map[string]string) bool {
+		return deps["beta"] == "3.2.0"
+	}, 1)
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeMinimalFound {
+		t.Fatalf("outcome = %q (%s)", res.Outcome, res.OutcomeDetail)
+	}
+	joined := strings.Join(res.Diagnostics, "\n")
+	if !strings.Contains(joined, "transitive") || !strings.Contains(joined, "trans (7.0.0->7.5.0)") {
+		t.Errorf("diagnostics = %v, want transitive drift naming trans", res.Diagnostics)
 	}
 }
 
