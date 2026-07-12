@@ -13,7 +13,7 @@
 
 You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 
-`git bisect` walks *commits* — DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies in your manifest (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `composer.json`, or `requirements.txt`) between two revisions, then narrows them to the exact minimal subset that makes your command fail — and proves no smaller set does. Every install runs in a throwaway git worktree, so it never touches your checkout.
+`git bisect` walks *commits* — DepBisect bisects the *dependency changes themselves*: it diffs the direct dependencies between two revisions — spec changes in your manifest (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `composer.json`, or `requirements.txt`) *and* lockfile-only resolution moves under unchanged specs — then narrows them to the exact minimal subset that makes your command fail, and proves no smaller set does. Every install runs in a throwaway git worktree, so it never touches your checkout.
 
 ![DepBisect narrowing 12 dependency changes down to the minimal 5-package set that broke the build](docs/assets/gifs/js/demo.gif)
 
@@ -21,16 +21,17 @@ You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 
 - **Provably minimal.** Runs Zeller's `ddmin` delta-debugging algorithm plus a one-by-one removal pass, so the answer is *1-minimal* — removing any single dependency from the set makes the failure stop reproducing — not merely "some failing subset."
 - **Multi-ecosystem.** JavaScript (`npm`, `pnpm`, `yarn`), Rust (`cargo`), Go (`go` modules), Python (`uv`, `pip`), and PHP (`composer`), auto-detected from the manifest or selected with `--pm`. The same engine and 1-minimality proof back every ecosystem.
+- **Bisects lockfile refreshes too.** A plain `uv lock -U`, `composer update`, or `npm update` moves resolutions without touching the manifest — DepBisect lifts each drifted dependency into a bisectable change by pinning its old resolution as an exact version spec, so "the lock refresh broke CI" gets the same minimal answer as a manifest bump (opt out with `--no-lockfile-pins`).
 - **Never touches your checkout.** Every install happens in a DepBisect-owned temporary git worktree. `git reset --hard` and `git clean -ffdx` run *only* there, never in your working tree.
 - **Flaky-test aware.** `--runs N` repeats each check; a candidate counts as failing only if *all* N runs fail. Mixed pass/fail results are reported as diagnostics, never silently guessed.
 - **Resumable.** Completed trials are checkpointed to disk. Interrupt with Ctrl-C, then pick up exactly where you left off with `--resume`.
 - **Deterministic & memoized.** Identical inputs produce an identical bisection path, and no dependency subset is ever installed or tested twice.
 - **CI-ready.** Meaningful exit codes (0–5), a schema-stable JSON report, and a reusable composite GitHub Action.
-- **Honest by design.** Lockfile-only changes, workspaces, and flaky baselines surface as clear diagnostics — DepBisect would rather say "inconclusive" than overstate certainty.
+- **Honest by design.** Unpinnable resolutions, transitive drift, workspaces, and flaky baselines surface as clear diagnostics — DepBisect would rather say "inconclusive" than overstate certainty.
 
 ## Why DepBisect
 
-**Reach for it when** a dependency-update PR (Dependabot, Renovate, or a manual bump) turns CI red and you can't tell which bump did it — especially when dozens changed at once, or when the culprit only breaks in combination with another bump.
+**Reach for it when** a dependency-update PR (Dependabot, Renovate, or a manual bump) or a plain lockfile refresh turns CI red and you can't tell which change did it — especially when dozens moved at once, or when the culprit only breaks in combination with another bump.
 
 | Instead of…               | The catch                                                                        | DepBisect                                  |
 | ------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------ |
@@ -40,6 +41,8 @@ You merge a PR that bumps 40 dependencies. CI goes red. **Which bump broke it?**
 | `npm why` / `npm ls`      | Explains the dependency tree, not the failure                                    | Ties the failure to specific version bumps |
 
 ## Install
+
+> Running in CI? Skip to the [GitHub Action](#github-action).
 
 DepBisect ships as a single static binary — pick whichever method fits. You'll
 also need `git` and your project's package manager (`npm`, `pnpm`, `yarn`, `cargo`, `go`, `uv`, `composer`, or `pip` ≥ 22.3 plus a `python3`) on your `PATH`.
@@ -357,9 +360,11 @@ the report to the job summary.
 
 ## Limitations
 
-- Only **direct** dependency changes in your manifest (`package.json`, `Cargo.toml`, `go.mod`,
-  `pyproject.toml`, `composer.json`, or `requirements.txt`) are bisected. Lockfile-only changes
-  (same spec, different resolution) are detected and reported, not bisected.
+- Only **direct** dependency changes are bisected: spec changes in your manifest
+  (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `composer.json`, or
+  `requirements.txt`) plus lockfile-only resolution moves, which are bisected via exact
+  version pins. **Transitive** drift and unpinnable resolutions (`file:`, git references,
+  Composer `dev-*`) are detected and reported, not bisected.
 - Installing candidates needs **registry or module access** and uses your package manager's
   normal configuration.
 - **Workspaces** (npm/pnpm/yarn, Cargo, Go `go.work`, and uv) are not supported yet.

@@ -4,6 +4,105 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Lockfile-only bisection: dependencies whose manifest spec is unchanged but
+  whose lockfile resolution moved between the revisions (a plain `uv lock -U`,
+  `composer update`, or `npm update` refresh) are now bisected instead of only
+  reported. Each drifted dependency becomes a synthetic change whose reverted
+  state pins the old resolution as an exact version spec (`1.2.3`, `=1.2.3`
+  for Cargo, `==1.2.3` for uv/PEP 508 with extras and markers preserved,
+  verbatim lock versions for Composer); applying it leaves the target manifest
+  untouched so the checked-out lockfile keeps supplying the new resolution.
+  Supported for npm/pnpm/yarn, Cargo, uv, and Composer; Go is exempt by
+  construction (MVS specs are the resolution) and pip has no separate
+  lockfile. Pinned changes carry a `(lockfile-only)` marker in terminal and
+  Markdown output and a `lockfileOnly` field in the JSON report; `depbisect
+  run --no-lockfile-pins` restores the previous report-only behavior.
+  Resolutions no exact pin can express (`file:`/`link:` targets, git
+  references, Composer branch versions) remain diagnostics, and purely
+  transitive resolution drift is now counted and named in a diagnostic of its
+  own. A hermetic uv demo (`examples/make-demo-python-lockonly.sh`, `make
+  demo-python-lockonly`) exercises the path in CI.
+- A `next` line in the run summary: when a minimal set is found, DepBisect now
+  suggests the copy-paste command that holds each culprit at its last good
+  version (`npm install --save-exact lodash@4.17.21`, `cargo add serde@=1.0.100`,
+  `uv add numpy==1.26.4`, `composer require acme/lib:v2.9.1`, `go get
+  mod@v1.2.3`, …), with exact section flags (`--save-dev`, `--dev`, `--build`)
+  and removal commands for culprits whose *addition* broke the build. The
+  suggestion is omitted entirely when any culprit's last good version is not
+  exactly known — partial advice would mislead.
+- `next` suggestions for the outcomes where the bisection could not convict
+  anything: `not-reproduced` points at environment differences, `fails-without-
+  updates` at bisecting the code itself, and `inconclusive` distinguishes
+  flaky verification (raise `--runs`) from failed candidate installs (rerun
+  with `--verbose`) using the run's own trial evidence.
+- Multi-change verdicts now state what the minimality proof established:
+  "these N changes break only in combination — removing any one of them makes
+  the failure disappear."
+- Failure evidence in the verdict: the run summary now shows the tail of the
+  failing command's output from the trial that convicted the minimal set (or,
+  for `fails-without-updates`, from the failing all-reverted baseline) — the
+  symptom behind the verdict, without rerunning anything. The excerpt is
+  ANSI-stripped and capped at three lines in the terminal; the full captured
+  tail is stored per failing trial in the checkpoint and surfaced as
+  `failureExcerpt` in the JSON report and a "Failure evidence" section in the
+  Markdown report.
+- Registry links for convicted culprits: one line per culprit pointing at the
+  registry page of the breaking version (npmjs.com, crates.io, pkg.go.dev,
+  PyPI, Packagist) — one click from its changelog. Culprits whose resolution
+  is not a registry version (`file:`, git references) are skipped.
+
+### Changed
+
+- Human run summaries no longer repeat the machine outcome token (`outcome
+  minimal-set-found`) below the result headline; scripts should use the exit
+  code or the JSON report, which are unchanged.
+- Diagnostics in the modern style render as their own `⚠ diagnostics` block
+  with one bullet per item at full contrast, instead of dim `note` rows in the
+  fact column. Version pairs in diagnostics are now unspaced tokens
+  (`1.0.0->2.0.0`, `→` in modern output) so wrapping can never split a pair
+  across lines.
+- Summary footers merge the trial and change counts into one line
+  (`trials 3 across 2 changes`), and the live reproduction row is labeled
+  `reproduce` while running, flipping to `reproduced` only once the verdict
+  lands.
+- Modern styling now tracks certainty: warning outcomes get a `!` headline
+  glyph instead of recycling the in-progress spinner, dry-run listings use a
+  neutral bullet and inconclusive best-known sets yellow marks (red is
+  reserved for the certified minimal set), long footer facts wrap with a
+  hanging indent, the manager row dims its build provenance, and the
+  `(lockfile-only)` tag carries a subtle tint so it reads as a category.
+- The modern summary's divider now stretches to the widest fact row (never
+  narrower than before, capped at the terminal width), so it underlines the
+  column instead of stopping short of it.
+- Failure evidence is tidied for display: temporary-worktree paths are
+  rewritten to repo-relative form at capture time (a stack frame reads
+  `test.js:5:11`, not a temp path that no longer exists), a tiny fixed set of
+  runner epilogues (npm's "complete log" pointer and its log path, Node's
+  version trailer, yarn's help link) is filtered from the terminal preview,
+  and each evidence line is truncated to one row instead of wrapping. Reports
+  keep the full captured tail.
+- `next` commands are never hard-wrapped: classic prints them on one physical
+  line, and the modern grid gives an over-wide command its own full-width
+  line under a bare label — selecting that line copies the exact command.
+
+- The npm and yarn demo generators now place their offline packages inside
+  the generated app repository with relative `file:./pkgs/...` specifiers,
+  matching the pnpm demo. Generated fixtures are machine-portable: they work
+  from git worktrees, other checkouts, and mounted into the Docker image,
+  where the previous absolute host paths could not resolve.
+
+### Fixed
+
+- `package-lock.json` version annotations follow npm's link chain (the
+  `node_modules/` entry to its linked directory target), so a lockfile that
+  lists several same-named `file:` package directories — as the regenerated
+  demos now do — annotates the version actually referenced instead of an
+  arbitrary one.
+
 ## [0.1.5] - 2026-07-07
 
 ### Added
