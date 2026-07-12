@@ -84,6 +84,9 @@ Flags for run:
   --resume              resume completed trials from --checkpoint
   --keep-worktrees      keep the temporary worktree for inspection
   --dry-run             show detected changes and plan; run nothing
+  --no-lockfile-pins    do not bisect lockfile-only changes (dependencies
+                        whose resolution moved without a spec change) via
+                        exact version pins; report them as diagnostics only
   --quiet               suppress progress; print only the final result
   --verbose             stream subprocess output and extra progress detail
   --style <name>        output style: modern (default) or classic; also set
@@ -140,6 +143,7 @@ type runOptions struct {
 	resume         bool
 	keepWorktrees  bool
 	dryRun         bool
+	noLockfilePins bool
 	quiet          bool
 	verbose        bool
 	style          outputStyle
@@ -179,6 +183,7 @@ func runFlagSet(opts *runOptions, styleName *string) *flag.FlagSet {
 	fs.BoolVar(&opts.resume, "resume", false, "")
 	fs.BoolVar(&opts.keepWorktrees, "keep-worktrees", false, "")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "")
+	fs.BoolVar(&opts.noLockfilePins, "no-lockfile-pins", false, "")
 	fs.BoolVar(&opts.quiet, "quiet", false, "")
 	fs.BoolVar(&opts.verbose, "verbose", false, "")
 	fs.StringVar(styleName, "style", "", "")
@@ -359,17 +364,18 @@ func runMain(args []string, stdout, stderr io.Writer, version string) int {
 	}
 
 	res, err := engineRun(ctx, engine.Options{
-		BaseRev:       opts.base,
-		ToRev:         opts.to,
-		Command:       opts.command,
-		Runs:          opts.runs,
-		Jobs:          opts.jobs,
-		PMOverride:    opts.pm,
-		KeepWorktrees: opts.keepWorktrees,
-		DryRun:        opts.dryRun,
-		Stream:        stream,
-		Checkpoint:    checkpointStore,
-		Resume:        opts.resume,
+		BaseRev:        opts.base,
+		ToRev:          opts.to,
+		Command:        opts.command,
+		Runs:           opts.runs,
+		Jobs:           opts.jobs,
+		PMOverride:     opts.pm,
+		KeepWorktrees:  opts.keepWorktrees,
+		DryRun:         opts.dryRun,
+		NoLockfilePins: opts.noLockfilePins,
+		Stream:         stream,
+		Checkpoint:     checkpointStore,
+		Resume:         opts.resume,
 		CheckpointContext: fmt.Sprintf("run-timeout=%s;install-timeout=%s;overall-timeout=%s",
 			opts.runTimeout, opts.installTimeout, opts.overallTimeout),
 		InstallTimeout: opts.installTimeout,

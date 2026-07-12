@@ -17,11 +17,22 @@ import (
 	"github.com/skyneticist/depbisect/internal/execx"
 )
 
+// failureTailLimit caps the output evidence retained per failing run. Real
+// failure messages live at the end of output; anything past a couple of
+// kilobytes is context the report files can carry, not the terminal.
+const failureTailLimit = 2048
+
 // RunResult records one execution of the verification command.
 type RunResult struct {
 	ExitCode int
 	Duration time.Duration
 	TimedOut bool
+	// OutputTail is the end of a failing run's output — stdout then stderr,
+	// since evidence location differs by runner (Rust's libtest reports
+	// failures on stdout while cargo's own trailer is stderr; node asserts
+	// on stderr) — capped at failureTailLimit bytes. Passing runs carry
+	// none; it exists purely as failure evidence.
+	OutputTail string
 }
 
 // Failed reports whether this run counts as a failure.
@@ -85,6 +96,38 @@ func (v Verdict) String() string {
 	s := fmt.Sprintf("failed %d/%d runs", v.Failures, len(v.Runs))
 	if v.Planned > len(v.Runs) {
 		s += fmt.Sprintf(" (stopped at first pass; %d planned)", v.Planned)
+	}
+	return s
+}
+
+// FailureTail returns the captured output tail of the most recent failing
+// run, or "" when no failing run produced output. The last failure is chosen
+// because a repeated failure's final occurrence is the freshest evidence.
+func (v Verdict) FailureTail() string {
+	for i := len(v.Runs) - 1; i >= 0; i-- {
+		if v.Runs[i].Failed() && v.Runs[i].OutputTail != "" {
+			return v.Runs[i].OutputTail
+		}
+	}
+	return ""
+}
+
+// failureTail joins and caps the evidence of a failed run: stdout first,
+// stderr last. Runners disagree about where failures go — Rust's libtest
+// prints the panic on stdout while cargo appends its own trailer to stderr;
+// node asserts on stderr — so keeping both (tail-capped) lets the renderer's
+// boilerplate filter surface whichever half carries the real error.
+func failureTail(res execx.Result) string {
+	parts := make([]string, 0, 2)
+	if _, ok := execx.FirstLine(res.Stdout); ok {
+		parts = append(parts, strings.TrimRight(string(res.Stdout), "\n"))
+	}
+	if _, ok := execx.FirstLine(res.Stderr); ok {
+		parts = append(parts, strings.TrimRight(string(res.Stderr), "\n"))
+	}
+	s := strings.Join(parts, "\n")
+	if len(s) > failureTailLimit {
+		s = s[len(s)-failureTailLimit:]
 	}
 	return s
 }
@@ -175,6 +218,9 @@ func (h Harness) Verify(ctx context.Context, dir string) (Verdict, error) {
 			} else {
 				return v, fmt.Errorf("verify: %w", err)
 			}
+		}
+		if rr.Failed() {
+			rr.OutputTail = failureTail(res)
 		}
 		v.Runs = append(v.Runs, rr)
 		if rr.Failed() {

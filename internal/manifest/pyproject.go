@@ -91,6 +91,11 @@ func ParsePyproject(data []byte) (*PyProject, error) {
 // HasWorkspaceLayout implements Parsed.
 func (p *PyProject) HasWorkspaceLayout() bool { return p.HasWorkspace }
 
+// ProjectName implements Parsed. uv.lock records the root project as a
+// [[package] entry under its PEP 503-normalized name, so the name is
+// normalized to match.
+func (p *PyProject) ProjectName() string { return normalizePyName(p.Name) }
+
 // uvWorkspacePresent reports whether the document declares a [tool.uv.workspace]
 // table, which marks a uv workspace root.
 func uvWorkspacePresent(doc map[string]any) bool {

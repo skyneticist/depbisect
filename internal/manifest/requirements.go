@@ -50,6 +50,9 @@ type reqLine struct {
 // requirements file describes a single environment — so this is always false.
 func (r *Requirements) HasWorkspaceLayout() bool { return false }
 
+// ProjectName implements Parsed; requirements files carry no project name.
+func (r *Requirements) ProjectName() string { return "" }
+
 // ParseRequirements parses requirements.txt bytes. The only rejected input is
 // a file using "--hash" pins (see Requirements); everything else parses, with
 // non-requirement lines preserved verbatim and skipped.

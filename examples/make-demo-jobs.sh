@@ -12,6 +12,12 @@
 # at once. That batch work is exactly what --jobs spreads across worktrees. The
 # minimal set is identical at any job count; a higher --jobs just finishes
 # sooner. Everything is offline: all packages use local file: paths.
+#
+# The packages live *inside* the app repository (file:./pkgs/...), like the
+# pnpm demo: relative in-repo paths travel with every git worktree, survive a
+# move to another machine, and work when the fixture is mounted into the
+# Docker image. (Relative specs also sidestep the MSYS path-format problem
+# that absolute file: paths hit under Git Bash on Windows.)
 set -eu
 
 for tool in git node npm; do
@@ -20,16 +26,8 @@ done
 
 cd "$(dirname "$0")"
 rm -rf demo-jobs
-mkdir -p demo-jobs/pkgs
+mkdir -p demo-jobs/app/pkgs
 ROOT=$(cd demo-jobs && pwd)
-
-# Filesystem ops below use the POSIX $ROOT. npm can't resolve MSYS-style
-# /d/a/... paths in file: specs on Windows, so under Git Bash the manifest
-# writer receives the native D:/a/... path ($NPM_ROOT) as ROOT instead.
-NPM_ROOT=$ROOT
-case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*) NPM_ROOT=$(cd "$ROOT" && pwd -W) ;;
-esac
 
 # The eight interacting culprits and the ten noise packages. Kept in shell
 # variables so the package generator, manifest writer, and test all agree.
@@ -37,9 +35,9 @@ CONSENSUS="consensus-auth consensus-codec consensus-gossip consensus-ledger cons
 NOISE="lib-cache lib-color lib-config lib-format lib-hash lib-json lib-log lib-parse lib-time lib-uuid"
 
 mkpkg() { # name version body
-    mkdir -p "$ROOT/pkgs/$1-$2"
-    printf '{"name":"%s","version":"%s","main":"index.js"}\n' "$1" "$2" > "$ROOT/pkgs/$1-$2/package.json"
-    printf '%s\n' "$3" > "$ROOT/pkgs/$1-$2/index.js"
+    mkdir -p "$ROOT/app/pkgs/$1-$2"
+    printf '{"name":"%s","version":"%s","main":"index.js"}\n' "$1" "$2" > "$ROOT/app/pkgs/$1-$2/package.json"
+    printf '%s\n' "$3" > "$ROOT/app/pkgs/$1-$2/index.js"
 }
 
 # Consensus participants: v1 negotiates the compatible protocol, v2 the new one.
@@ -55,7 +53,6 @@ for name in $NOISE; do
     mkpkg "$name" 1.1.0 "module.exports = () => '$name';"
 done
 
-mkdir "$ROOT/app"
 cd "$ROOT/app"
 git init -q -b main
 
@@ -67,12 +64,12 @@ git_commit() {
 # one version and every lib-* to another, spreading the noise across all three
 # dependency sections.
 write_manifest() {
-    CONSENSUS="$CONSENSUS" NOISE="$NOISE" ROOT="$NPM_ROOT" CV="$1" NV="$2" node <<'NODE'
+    CONSENSUS="$CONSENSUS" NOISE="$NOISE" CV="$1" NV="$2" node <<'NODE'
 const fs = require('fs');
 const consensus = process.env.CONSENSUS.split(' ');
 const noise = process.env.NOISE.split(' ');
-const { ROOT, CV, NV } = process.env;
-const ref = (name, ver) => `file:${ROOT}/pkgs/${name}-${ver}`;
+const { CV, NV } = process.env;
+const ref = (name, ver) => `file:./pkgs/${name}-${ver}`;
 const dependencies = {}, devDependencies = {}, optionalDependencies = {};
 for (const name of consensus) dependencies[name] = ref(name, CV);
 noise.forEach((name, i) => {

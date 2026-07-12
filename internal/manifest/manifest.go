@@ -121,6 +121,10 @@ type Change struct {
 	// lockfiles, when known ("" otherwise).
 	OldResolved string
 	NewResolved string
+	// LockfileOnly marks a change synthesized from lockfile-only drift: the
+	// manifest spec never changed, and OldSpec is an exact pin of the old
+	// resolution rather than text taken from the old manifest.
+	LockfileOnly bool
 }
 
 // ID returns a stable identifier unique among the changes of one diff.
@@ -138,6 +142,9 @@ func (c Change) String() string {
 	suffix := ""
 	if c.Section != Dependencies {
 		suffix = " (" + string(c.Section) + ")"
+	}
+	if c.LockfileOnly {
+		suffix += " (lockfile-only)"
 	}
 	switch c.Kind {
 	case Added:
@@ -185,13 +192,20 @@ func diffSections(old, new map[Section]map[string]string, order []Section) []Cha
 			}
 		}
 	}
+	SortChanges(changes)
+	return changes
+}
+
+// SortChanges sorts changes by dependency name, then section — the shared
+// deterministic order every diff produces. Callers that merge change lists
+// from multiple sources use it to restore that order.
+func SortChanges(changes []Change) {
 	slices.SortFunc(changes, func(a, b Change) int {
 		if c := cmp.Compare(a.Name, b.Name); c != 0 {
 			return c
 		}
 		return cmp.Compare(a.Section, b.Section)
 	})
-	return changes
 }
 
 // Render produces candidate package.json bytes based on the new manifest, in

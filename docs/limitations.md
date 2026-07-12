@@ -9,8 +9,8 @@
 
 ## Supported but with caveats (reported as diagnostics, never silent)
 
-- **Lockfile-only changes.** Dependencies whose `package.json` spec is unchanged but whose resolved version moved are listed in reports and diagnostics, not bisected. See [how-it-works.md](how-it-works.md).
-- **Transitive dependencies.** Candidate installs resolve transitive deps fresh from the registry; if the registry state changed since the lockfile was written, a candidate's transitive tree may differ from what either revision originally installed.
+- **Lockfile-only changes.** Direct dependencies whose spec is unchanged but whose resolved version moved are bisected through synthesized exact version pins (disable with `--no-lockfile-pins`); they carry a `(lockfile-only)` marker in output and `lockfileOnly` in the JSON report. Resolutions no pin can express — `file:`/`link:` targets, git references, Composer branch versions like `dev-main` — are listed in reports and diagnostics instead. See [how-it-works.md](how-it-works.md).
+- **Transitive dependencies.** Only direct dependencies are bisected. Transitive packages that resolved differently between the revisions without any direct dependency changing are named in a diagnostic (except for Go, where `go.sum` is a hash allowlist rather than a resolution record) but cannot be steered individually. Candidate installs also resolve transitive deps fresh from the registry; if the registry state changed since the lockfile was written, a candidate's transitive tree may differ from what either revision originally installed.
 - **Registry access.** Candidate installation requires network access to your configured registry. (DepBisect's own test suite does not.)
 - **`peerDependencies`.** Changes there are not diffed or bisected.
 - **Uncommitted changes.** DepBisect compares committed revisions only; dirty `package.json`/lockfile files trigger a warning.
@@ -29,8 +29,8 @@
   filesystem deletion is synchronous and cannot be canceled, so a stalled
   filesystem can extend process runtime beyond the overall timeout.
 - **Version spec edge cases.** pnpm v5 lockfile versions with both build metadata and a peer suffix (e.g. `1.2.3+build_meta`) may display a truncated resolved version. Display-only; does not affect bisection.
-- **Yarn multi-version resolutions.** `yarn.lock` is keyed by version range, so one package can resolve to several versions at once when transitive ranges conflict. Such packages have no single resolved version: their annotations are left blank and lockfile-only diagnostics skip them. Display-only; does not affect bisection.
-- **Cargo without a lockfile.** `Cargo.lock` is optional; without it, resolved-version annotations and lockfile-only diagnostics are unavailable, but bisection still works (candidates resolve via `cargo fetch`).
+- **Yarn multi-version resolutions.** `yarn.lock` is keyed by version range, so one package can resolve to several versions at once when transitive ranges conflict. Such packages have no single resolved version: their annotations are left blank, and lockfile-only detection (and therefore pin synthesis) skips them. Manifest-change bisection is unaffected.
+- **Cargo without a lockfile.** `Cargo.lock` is optional; without it, resolved-version annotations, lockfile-only detection, and pin synthesis are unavailable, but manifest-change bisection still works (candidates resolve via `cargo fetch`).
 - **Cargo non-versioned dependencies.** `git`, `path`, and workspace-inherited (`foo.workspace = true`) dependencies carry no version requirement and are not bisected.
 - **Cargo candidate formatting.** Candidate `Cargo.toml` files are re-serialized, so comments and original formatting are not preserved (visible only under `--keep-worktrees`). Reverting a *removed* table-form dependency restores its version but not sibling keys such as `features`.
 - **Python beyond uv and pip.** uv projects are detected by a `uv.lock` beside `pyproject.toml`, pip projects by a `requirements.txt`; Poetry, PDM, and other resolvers are not recognized (pass `--pm uv` only for uv projects). For uv, only the PEP 621 `[project.dependencies]` array is bisected — optional-dependencies (extras) and dependency groups are not — and direct-reference requirements (`name @ url`) carry no bisectable version, so they are skipped.
@@ -42,7 +42,7 @@
 
 | Exit | Outcome | What it means |
 |---|---|---|
-| 2 | `not-reproduced` | The command passed with all updates applied in a clean worktree. Suspect environment differences, lockfile-only changes, or staleness. |
-| 3 | `fails-without-updates` | The command fails at `--to` even with all dependency updates reverted: the cause is your code or a lockfile-only change, not a direct dependency bump. |
+| 2 | `not-reproduced` | The command passed with all updates applied in a clean worktree. Suspect environment differences, unpinnable or transitive lockfile changes, or staleness. |
+| 3 | `fails-without-updates` | The command fails at `--to` even with all dependency updates reverted: the cause is your code or an unpinnable/transitive lockfile change, not a direct dependency change. |
 | 4 | `inconclusive` | A baseline is flaky, or a best-known failing set could not be proven 1-minimal because a required neighboring candidate was unresolved or flaky. |
 | 5 | `no-dependency-changes` | The manifests are identical; nothing to bisect. |

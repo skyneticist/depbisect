@@ -35,6 +35,10 @@ type Change struct {
 	NewSpec     string `json:"newSpec,omitempty"`
 	OldResolved string `json:"oldResolved,omitempty"`
 	NewResolved string `json:"newResolved,omitempty"`
+	// LockfileOnly marks a change synthesized from lockfile-only drift and
+	// bisected through an exact version pin (oldSpec) rather than a spec
+	// taken from the old manifest.
+	LockfileOnly bool `json:"lockfileOnly,omitempty"`
 }
 
 // LockfileChange mirrors manifest.LockfileChange.
@@ -90,6 +94,7 @@ type Report struct {
 	LockfileOnly          []LockfileChange `json:"lockfileOnlyChanges"`
 	MinimalSet            []Change         `json:"minimalSet"`
 	Confidence            *Confidence      `json:"confidence,omitempty"`
+	FailureExcerpt        string           `json:"failureExcerpt,omitempty"`
 	MinimalityProven      bool             `json:"minimalityProven"`
 	UnresolvedTrials      int              `json:"unresolvedTrials"`
 	ResumedTrials         int              `json:"resumedTrials"`
@@ -122,6 +127,7 @@ func New(res *engine.Result, toolVersion string) *Report {
 		Changes:               make([]Change, 0, len(res.Changes)),
 		LockfileOnly:          make([]LockfileChange, 0, len(res.LockfileOnly)),
 		MinimalSet:            make([]Change, 0, len(res.Minimal)),
+		FailureExcerpt:        res.FailureExcerpt,
 		Diagnostics:           append([]string{}, res.Diagnostics...),
 		Trials:                make([]Trial, 0, len(res.Trials)),
 		StartedAt:             res.StartedAt.UTC().Format(time.RFC3339),
@@ -175,6 +181,7 @@ func toChange(c manifest.Change) Change {
 		Name: c.Name, Section: string(c.Section), Kind: c.Kind.String(),
 		OldSpec: c.OldSpec, NewSpec: c.NewSpec,
 		OldResolved: c.OldResolved, NewResolved: c.NewResolved,
+		LockfileOnly: c.LockfileOnly,
 	}
 }
 
@@ -230,6 +237,16 @@ func (r *Report) Markdown() []byte {
 		b.WriteString("\n")
 	}
 
+	if r.FailureExcerpt != "" {
+		// Indented code block, not a fence: excerpt content can contain
+		// backticks, and an indented block cannot be broken out of.
+		fmt.Fprintf(&b, "## Failure evidence\n\n")
+		for _, line := range strings.Split(r.FailureExcerpt, "\n") {
+			fmt.Fprintf(&b, "    %s\n", line)
+		}
+		b.WriteString("\n")
+	}
+
 	if r.ResumedTrials > 0 || r.UnresolvedTrials > 0 {
 		fmt.Fprintf(&b, "## Run continuity\n\n")
 		fmt.Fprintf(&b, "- Resumed trials: %d\n", r.ResumedTrials)
@@ -240,8 +257,12 @@ func (r *Report) Markdown() []byte {
 	if len(r.humanChanges) > 0 {
 		fmt.Fprintf(&b, "| Dependency | Section | Change | Old | New |\n|---|---|---|---|---|\n")
 		for _, c := range r.humanChanges {
+			kind := c.Kind.String()
+			if c.LockfileOnly {
+				kind += " (lockfile-only, pinned)"
+			}
 			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n",
-				c.Name, c.Section, c.Kind, versionCell(c.OldSpec, c.OldResolved), versionCell(c.NewSpec, c.NewResolved))
+				c.Name, c.Section, kind, versionCell(c.OldSpec, c.OldResolved), versionCell(c.NewSpec, c.NewResolved))
 		}
 		b.WriteString("\n")
 	} else {
@@ -249,7 +270,7 @@ func (r *Report) Markdown() []byte {
 	}
 
 	if len(r.LockfileOnly) > 0 {
-		fmt.Fprintf(&b, "## Lockfile-only changes (%d, not bisectable)\n\n", len(r.LockfileOnly))
+		fmt.Fprintf(&b, "## Lockfile-only changes (%d, not bisected)\n\n", len(r.LockfileOnly))
 		fmt.Fprintf(&b, "| Dependency | Spec | Old resolved | New resolved |\n|---|---|---|---|\n")
 		for _, lc := range r.LockfileOnly {
 			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", lc.Name, lc.Spec, lc.OldResolved, lc.NewResolved)

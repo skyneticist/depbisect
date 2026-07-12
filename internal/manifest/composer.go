@@ -34,6 +34,10 @@ type ComposerJSON struct {
 // each composer.json is a standalone package — so this is always false.
 func (c *ComposerJSON) HasWorkspaceLayout() bool { return false }
 
+// ProjectName implements Parsed. The root package never appears among
+// composer.lock's packages, but the name is returned for interface parity.
+func (c *ComposerJSON) ProjectName() string { return c.Name }
+
 // ParseComposerJSON parses composer.json bytes. It fails on malformed JSON, on
 // non-object documents, and on require/require-dev sections whose values are
 // not name -> string maps.

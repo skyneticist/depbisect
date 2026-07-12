@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -150,6 +151,7 @@ func (ex *executor) eval(ctx context.Context, subset []manifest.Change, role str
 	switch verdict.Classification() {
 	case verify.AlwaysFail:
 		trial.Outcome = "fail"
+		trial.FailureExcerpt = sanitizeExcerpt(verdict.FailureTail(), dir)
 	case verify.AlwaysPass:
 		trial.Outcome = "pass"
 	default:
@@ -159,6 +161,31 @@ func (ex *executor) eval(ctx context.Context, subset []manifest.Change, role str
 	ex.progress.Trial(num, role, len(subset), ex.totalChanges, trial.Outcome, trial.Duration)
 	ex.progress.Detail("Tested %d applied changes: %s (%s)", len(subset), trial.Outcome, verdict.String())
 	return ex.record(key, trial), nil
+}
+
+// sanitizeExcerpt makes failure evidence readable outside its throwaway
+// worktree: occurrences of the trial directory become repo-relative paths,
+// so a stack frame reads "test.js:5:11" instead of a temp path nobody can
+// open after cleanup. The symlink-resolved form is replaced too — macOS
+// hands out /var/folders temp dirs, but subprocesses report the real
+// /private/var path.
+func sanitizeExcerpt(excerpt, dir string) string {
+	if excerpt == "" {
+		return excerpt
+	}
+	dirs := []string{dir}
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil && resolved != dir {
+		dirs = append(dirs, resolved)
+	}
+	// Longest form first: on macOS the resolved path (/private/var/...)
+	// contains the unresolved one (/var/...) as a substring, and replacing
+	// the shorter form first would leave a "/private" fragment behind.
+	slices.SortFunc(dirs, func(a, b string) int { return len(b) - len(a) })
+	for _, d := range dirs {
+		excerpt = strings.ReplaceAll(excerpt, d+string(filepath.Separator), "")
+		excerpt = strings.ReplaceAll(excerpt, d, ".")
+	}
+	return excerpt
 }
 
 // record persists a completed trial into the memo, the result, and the

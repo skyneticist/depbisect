@@ -331,6 +331,27 @@ the generated repository.
 
 ![DepBisect isolating the breakage bump of the Python (uv) demo](../docs/assets/gifs/python/uv.gif)
 
+### Lockfile-only variant
+
+`make-demo-python-lockonly.sh` generates the same app at
+`examples/demo-python-lockonly/` with one crucial difference: `pyproject.toml`
+uses range specs (`breakage>=1`) and is **identical at both commits** — the
+second commit publishes new wheels and refreshes `uv.lock` with `uv lock -U`,
+so the only dependency change lives in the lockfile. This exercises
+lockfile-only bisection: with no manifest diff to rewrite, DepBisect pins each
+old resolution as an exact version spec (`breakage==1.0.0`) and delta-debugs
+those pins instead.
+
+```sh
+./examples/make-demo-python-lockonly.sh
+go build ./cmd/depbisect
+./depbisect run --repo examples/demo-python-lockonly/app --base HEAD~1 --runs 3 -- uv run -- python check.py
+```
+
+Expected result: minimal failing set = `breakage 1.0.0 -> 2.0.0 (lockfile-only)`.
+Pass `--no-lockfile-pins` to see the pre-pinning behavior: no bisectable
+changes, with the drift reported as a diagnostic instead.
+
 ## PHP (composer) demo
 
 `make-demo-composer.sh` generates a PHP equivalent at `examples/demo-composer/`.

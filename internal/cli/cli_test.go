@@ -213,8 +213,9 @@ func TestExitCodeMapping(t *testing.T) {
 
 func TestSummaryMinimalFound(t *testing.T) {
 	res := &engine.Result{
-		Outcome: engine.OutcomeMinimalFound,
-		Changes: make([]manifest.Change, 43),
+		Outcome:        engine.OutcomeMinimalFound,
+		PackageManager: "npm",
+		Changes:        make([]manifest.Change, 43),
 		Minimal: []manifest.Change{
 			{Name: "@acme/parser", Section: manifest.Dependencies, Kind: manifest.Updated,
 				OldSpec: "3.8.1", NewSpec: "3.9.0", OldResolved: "3.8.1", NewResolved: "3.9.0"},
@@ -226,16 +227,21 @@ func TestSummaryMinimalFound(t *testing.T) {
 	got := buf.String()
 	for _, want := range []string{
 		"Result Minimal breaking dependency set found",
-		"Outcome minimal-set-found",
 		"Changes 43 analyzed",
 		"Breaking dependencies",
 		"@acme/parser  3.8.1 -> 3.9.0",
 		"Evidence 3/3 failing runs",
+		"Next npm install --save-exact @acme/parser@3.8.1",
 		"Report depbisect-report.md",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("summary missing %q:\n%s", want, got)
 		}
+	}
+	// The machine token belongs to the exit code and the JSON report, not the
+	// human summary, where it would only duplicate the Result headline.
+	if strings.Contains(got, "minimal-set-found") {
+		t.Errorf("summary should not repeat the machine outcome token:\n%s", got)
 	}
 }
 

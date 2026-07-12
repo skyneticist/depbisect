@@ -13,6 +13,12 @@
 # worktrees, so a higher job count finishes the same bisection markedly sooner.
 # The minimal set is identical at any job count. Everything is offline: all
 # packages use local file: paths.
+#
+# The packages live *inside* the app repository (file:./pkgs/...), like the
+# pnpm demo: relative in-repo paths travel with every git worktree, survive a
+# move to another machine, and work when the fixture is mounted into the
+# Docker image. (Relative specs also sidestep the MSYS path-format problem
+# that absolute file: paths hit under Git Bash on Windows.)
 set -eu
 
 for tool in git node npm; do
@@ -21,16 +27,8 @@ done
 
 cd "$(dirname "$0")"
 rm -rf demo-swarm
-mkdir -p demo-swarm/pkgs
+mkdir -p demo-swarm/app/pkgs
 ROOT=$(cd demo-swarm && pwd)
-
-# Filesystem ops below use the POSIX $ROOT. npm can't resolve MSYS-style
-# /d/a/... paths in file: specs on Windows, so under Git Bash the manifest
-# writer receives the native D:/a/... path ($NPM_ROOT) as ROOT instead.
-NPM_ROOT=$ROOT
-case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*) NPM_ROOT=$(cd "$ROOT" && pwd -W) ;;
-esac
 
 # The twelve interacting culprits and the sixteen noise packages. Kept in shell
 # variables so the package generator, manifest writer, and test all agree.
@@ -38,9 +36,9 @@ REPLICAS="replica-01 replica-02 replica-03 replica-04 replica-05 replica-06 repl
 NOISE="lib-async lib-buffer lib-cache lib-color lib-config lib-crypto lib-format lib-hash lib-json lib-log lib-parse lib-stream lib-time lib-uuid lib-yaml lib-zip"
 
 mkpkg() { # name version body
-    mkdir -p "$ROOT/pkgs/$1-$2"
-    printf '{"name":"%s","version":"%s","main":"index.js"}\n' "$1" "$2" > "$ROOT/pkgs/$1-$2/package.json"
-    printf '%s\n' "$3" > "$ROOT/pkgs/$1-$2/index.js"
+    mkdir -p "$ROOT/app/pkgs/$1-$2"
+    printf '{"name":"%s","version":"%s","main":"index.js"}\n' "$1" "$2" > "$ROOT/app/pkgs/$1-$2/package.json"
+    printf '%s\n' "$3" > "$ROOT/app/pkgs/$1-$2/index.js"
 }
 
 # Replica nodes: v1 speaks the legacy wire format, v2 the new one.
@@ -56,7 +54,6 @@ for name in $NOISE; do
     mkpkg "$name" 1.1.0 "module.exports = () => '$name';"
 done
 
-mkdir "$ROOT/app"
 cd "$ROOT/app"
 git init -q -b main
 
@@ -68,12 +65,12 @@ git_commit() {
 # version and every lib-* to another, spreading the noise across all three
 # dependency sections.
 write_manifest() {
-    REPLICAS="$REPLICAS" NOISE="$NOISE" ROOT="$NPM_ROOT" RV="$1" NV="$2" node <<'NODE'
+    REPLICAS="$REPLICAS" NOISE="$NOISE" RV="$1" NV="$2" node <<'NODE'
 const fs = require('fs');
 const replicas = process.env.REPLICAS.split(' ');
 const noise = process.env.NOISE.split(' ');
-const { ROOT, RV, NV } = process.env;
-const ref = (name, ver) => `file:${ROOT}/pkgs/${name}-${ver}`;
+const { RV, NV } = process.env;
+const ref = (name, ver) => `file:./pkgs/${name}-${ver}`;
 const dependencies = {}, devDependencies = {}, optionalDependencies = {};
 for (const name of replicas) dependencies[name] = ref(name, RV);
 noise.forEach((name, i) => {
