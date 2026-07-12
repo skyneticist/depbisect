@@ -74,10 +74,12 @@ func cylonFrameInterval(jobs int) time.Duration {
 // Glyphs used by the modern style. They render only when color is active,
 // which in practice means a real terminal; classic output stays glyph-free.
 const (
-	glyphOK     = "✓"
-	glyphFail   = "✗"
-	glyphActive = "↻"
-	glyphArrow  = "→"
+	glyphOK      = "✓"
+	glyphFail    = "✗"
+	glyphActive  = "↻"
+	glyphArrow   = "→"
+	glyphWarn    = "!"
+	glyphNeutral = "·"
 )
 
 // outputStyle selects how progress and the final summary are rendered.
@@ -371,9 +373,15 @@ func isLivePhase(phase string) bool {
 	return phase == "preparing" || phase == "installing" || phase == "verifying"
 }
 
-func modernRoleLabel(role string) string {
+// modernRoleLabel names a baseline row. The reproduction row is labeled in
+// the present tense while it is still running — it has not reproduced
+// anything yet — and flips to the past tense once the verdict lands.
+func modernRoleLabel(role string, done bool) string {
 	if role == "baseline-new" {
-		return "reproduced"
+		if done {
+			return "reproduced"
+		}
+		return "reproduce"
 	}
 	return "baseline"
 }
@@ -381,7 +389,7 @@ func modernRoleLabel(role string) string {
 func (p *progress) refreshBaselineWorking(role, phase string) {
 	p.interrupt()
 	fmt.Fprintf(p.w, "%s %-*s %s",
-		paint(ansiCyan, glyphActive), modernLabelWidth, modernRoleLabel(role), paint(ansiGray, phase+"…"))
+		paint(ansiCyan, glyphActive), modernLabelWidth, modernRoleLabel(role, false), paint(ansiGray, phase+"…"))
 	p.activeTrial = true
 }
 
@@ -402,7 +410,9 @@ func (p *progress) finalizeBaseline(role string, total int, phase string) {
 	if trialExpectation(role, phase) == "unexpected" {
 		msg += " " + paint(ansiYellow, "(unexpected)")
 	}
-	p.writeModernRow(glyph, color, modernRoleLabel(role), msg)
+	// The past tense is earned: a reproduction row that unexpectedly passed
+	// did not reproduce anything, so its label stays in the present tense.
+	p.writeModernRow(glyph, color, modernRoleLabel(role, phase != "pass"), msg)
 }
 
 // refreshDdmin repaints the live ddmin row and ensures the animation ticker
@@ -551,6 +561,10 @@ func printSummary(w io.Writer, res *engine.Result, mdPath, jsonPath string, styl
 	switch res.Outcome {
 	case engine.OutcomeMinimalFound:
 		writeChangeSection(w, "Breaking dependencies", res.Minimal, color)
+		if len(res.Minimal) > 1 {
+			fmt.Fprintln(w)
+			writeStatus(w, "Interaction", sentenceCase(interactionSentence(len(res.Minimal))), color, ansiCyan, true)
+		}
 	case engine.OutcomeInconclusive:
 		if len(res.Minimal) > 0 {
 			writeChangeSection(w, "Best-known failing set", res.Minimal, color)
@@ -577,14 +591,32 @@ func printSummary(w io.Writer, res *engine.Result, mdPath, jsonPath string, styl
 			fmt.Sprintf("%d/%d failing runs", res.Confidence.Failures, res.Confidence.Runs),
 			color, ansiGreen, true)
 	}
-	writeStatus(w, "Changes", fmt.Sprintf("%d analyzed", len(res.Changes)), color, ansiCyan, true)
+	for i, line := range excerptLines(res.FailureExcerpt, failureExcerptLines, terminalLineWidth(w)-statusWidth-1) {
+		label := "Failure"
+		if i > 0 {
+			label = ""
+		}
+		writeStatus(w, label, line, color, ansiRed, true)
+	}
+	for _, hint := range summaryNextHints(res) {
+		if res.Outcome == engine.OutcomeMinimalFound {
+			// Commands are copy-paste material: print them on one physical
+			// line and let the terminal soft-wrap, rather than hard-wrapping
+			// a newline into what the user will select.
+			writeStatus(w, "Next", hint, color, ansiGreen, false)
+			fmt.Fprintln(w)
+			continue
+		}
+		writeStatus(w, "Next", hint, color, ansiGreen, true)
+	}
 	if len(res.Trials) > 0 {
-		writeStatus(w, "Trials", strconv.Itoa(len(res.Trials)), color, ansiCyan, true)
+		writeStatus(w, "Trials", fmt.Sprintf("%d across %d changes", len(res.Trials), len(res.Changes)), color, ansiCyan, true)
+	} else {
+		writeStatus(w, "Changes", fmt.Sprintf("%d analyzed", len(res.Changes)), color, ansiCyan, true)
 	}
 	if duration := res.FinishedAt.Sub(res.StartedAt); !res.StartedAt.IsZero() && duration > 0 {
 		writeStatus(w, "Duration", formatDuration(duration), color, ansiCyan, true)
 	}
-	writeStatus(w, "Outcome", res.Outcome, color, ansiCyan, true)
 
 	for _, d := range res.Diagnostics {
 		writeStatus(w, "Note", d, color, ansiYellow, true)
@@ -602,6 +634,90 @@ func printSummary(w io.Writer, res *engine.Result, mdPath, jsonPath string, styl
 	case jsonPath != "":
 		writeStatus(w, "JSON", jsonPath, color, ansiCyan, true)
 	}
+	if res.Outcome == engine.OutcomeMinimalFound {
+		for _, link := range registryLinks(res.PackageManager, res.Minimal) {
+			writeStatus(w, "Registry", link, color, ansiCyan, true)
+		}
+	}
+}
+
+// failureExcerptLines caps how many lines of failure evidence the terminal
+// summary shows; the full captured tail lives in the reports.
+const failureExcerptLines = 3
+
+// excerptLines returns the last max non-blank, non-boilerplate lines of a
+// failure excerpt, ANSI-stripped (test runners colorize their output; those
+// codes must not leak into ours), right-trimmed, and truncated to width so
+// every evidence line occupies exactly one row — the excerpt is a preview,
+// and the full tail lives in the reports. Leading indentation is preserved
+// so tracebacks keep their shape.
+func excerptLines(excerpt string, max, width int) []string {
+	if excerpt == "" {
+		return nil
+	}
+	var lines []string
+	for _, l := range strings.Split(excerpt, "\n") {
+		l = strings.TrimRight(stripANSI(l), " \t\r")
+		if strings.TrimSpace(l) == "" || excerptBoilerplate(l) {
+			continue
+		}
+		if width > 0 {
+			l = truncateText(l, width)
+		}
+		lines = append(lines, l)
+	}
+	if len(lines) > max {
+		lines = lines[len(lines)-max:]
+	}
+	return lines
+}
+
+// excerptBoilerplate reports runner-trailer lines that carry no diagnostic
+// value and routinely crowd out the real error in a short excerpt. The list
+// is deliberately tiny and exact-ish — years-stable epilogue strings only;
+// anything ambiguous stays. Presentation-only: reports keep the full tail.
+func excerptBoilerplate(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	switch {
+	case strings.Contains(trimmed, "A complete log of this run can be found in"):
+		return true // npm epilogue
+	case strings.Contains(trimmed, "-debug-") && strings.HasSuffix(trimmed, ".log"):
+		return true // the npm log path printed under that epilogue
+	case strings.HasPrefix(trimmed, "Node.js v"):
+		return true // node's crash-report version trailer
+	case strings.HasPrefix(trimmed, "info Visit https://yarnpkg.com"):
+		return true // yarn classic's help-link epilogue
+	default:
+		return false
+	}
+}
+
+// stripANSI removes CSI escape sequences (\x1b[...letter) from s.
+func stripANSI(s string) string {
+	if !strings.Contains(s, "\x1b") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	inEsc := false
+	for _, r := range s {
+		switch {
+		case inEsc:
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEsc = false
+			}
+		case r == '\x1b':
+			inEsc = true
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// visibleWidth is the on-screen rune width of a possibly painted string.
+func visibleWidth(s string) int {
+	return utf8.RuneCountInString(stripANSI(s))
 }
 
 // printModernSummary renders the dressed report: a glyph headline, the
@@ -613,40 +729,73 @@ func printModernSummary(w io.Writer, res *engine.Result, mdPath, jsonPath string
 
 	switch res.Outcome {
 	case engine.OutcomeMinimalFound:
-		writeModernChanges(w, "minimal set", res.Minimal)
+		writeModernChanges(w, "minimal set", res.Minimal, glyphFail, ansiRed)
+		if len(res.Minimal) > 1 {
+			fmt.Fprintf(w, "%*s%s\n", modernGutter*2, "",
+				paint(ansiGray, interactionSentence(len(res.Minimal))))
+		}
 	case engine.OutcomeInconclusive:
 		if len(res.Minimal) > 0 {
-			writeModernChanges(w, "best-known failing set", res.Minimal)
+			writeModernChanges(w, "best-known failing set", res.Minimal, glyphFail, ansiYellow)
 		}
 	case engine.OutcomeDryRun:
-		writeModernChanges(w, "dependency changes", res.Changes)
+		writeModernChanges(w, "dependency changes", res.Changes, glyphNeutral, ansiGray)
 	}
 
 	if res.OutcomeDetail != "" && res.Outcome != engine.OutcomeMinimalFound {
 		fmt.Fprintf(w, "\n%*s%s\n", modernGutter, "", paint(ansiGray, sentenceCase(res.OutcomeDetail)))
 	}
 
-	facts := make([][2]string, 0, 10)
-	add := func(label, value string) { facts = append(facts, [2]string{label, value}) }
+	writeModernDiagnostics(w, res.Diagnostics)
+
+	valueWidth := terminalLineWidth(w) - modernGutter - modernLabelWidth - 1
+
+	type summaryFact struct {
+		label, value string
+		// breakout renders an over-wide value on its own full-width line
+		// under a bare label, so the grid never breaks and selecting that
+		// one line copies the exact value.
+		breakout bool
+	}
+	facts := make([]summaryFact, 0, 10)
+	add := func(label, value string) { facts = append(facts, summaryFact{label: label, value: value}) }
+	if res.Outcome == engine.OutcomeMinimalFound {
+		add("evidence", fmt.Sprintf("%d/%d failing runs · certified minimal",
+			res.Confidence.Failures, res.Confidence.Runs))
+	}
+	// Proof, then symptom, then action: the failure excerpt sits between the
+	// evidence line and the next-step suggestion.
+	for i, line := range excerptLines(res.FailureExcerpt, failureExcerptLines, valueWidth) {
+		label := "failure"
+		if i > 0 {
+			label = ""
+		}
+		add(label, line)
+	}
+	for _, hint := range summaryNextHints(res) {
+		// Pin-back commands are copy-paste material: bold, never hard-wrapped
+		// (breakout gives an over-wide command its own full-width line).
+		// Failure-path advice is a sentence, left plain so it wraps like any
+		// long fact.
+		if res.Outcome == engine.OutcomeMinimalFound {
+			facts = append(facts, summaryFact{label: "next", value: paint(ansiBold, hint), breakout: true})
+			continue
+		}
+		add("next", hint)
+	}
 	if len(res.Command) > 0 {
 		add("command", formatCommand(res.Command))
 	}
 	if manager := managerLabel(res); manager != "" {
-		add("manager", manager)
+		add("manager", dimParenthetical(manager))
 	}
-	if res.Outcome == engine.OutcomeMinimalFound {
-		add("evidence", fmt.Sprintf("%d / %d failing runs · certified minimal",
-			res.Confidence.Failures, res.Confidence.Runs))
-	}
-	add("changes", fmt.Sprintf("%d analyzed", len(res.Changes)))
 	if len(res.Trials) > 0 {
-		add("trials", strconv.Itoa(len(res.Trials)))
+		add("trials", fmt.Sprintf("%d across %d changes", len(res.Trials), len(res.Changes)))
+	} else {
+		add("changes", fmt.Sprintf("%d analyzed", len(res.Changes)))
 	}
 	if duration := res.FinishedAt.Sub(res.StartedAt); !res.StartedAt.IsZero() && duration > 0 {
 		add("duration", formatDuration(duration))
-	}
-	for _, d := range res.Diagnostics {
-		add("note", paint(ansiYellow, d))
 	}
 	if res.KeptWorktree != "" {
 		add("worktree", res.KeptWorktree)
@@ -657,17 +806,89 @@ func printModernSummary(w io.Writer, res *engine.Result, mdPath, jsonPath string
 	if jsonPath != "" {
 		add("json", paint(ansiCyan, jsonPath))
 	}
-	add("outcome", res.Outcome)
+	if res.Outcome == engine.OutcomeMinimalFound {
+		for _, link := range registryLinks(res.PackageManager, res.Minimal) {
+			add("registry", paint(ansiCyan, link))
+		}
+	}
 
-	fmt.Fprintf(w, "\n%*s%s\n", modernGutter, "", paint(ansiGray, strings.Repeat("─", modernRuleWidth)))
+	// The rule spans the widest fact row (its floor is the classic width), so
+	// it reads as underlining the column rather than stopping short of it.
+	ruleWidth := modernRuleWidth
 	for _, f := range facts {
-		fmt.Fprintf(w, "%*s%s %s\n", modernGutter, "", paint(ansiGray, fmt.Sprintf("%-*s", modernLabelWidth, f[0])), f[1])
+		vis := visibleWidth(f.value)
+		if vis > valueWidth {
+			vis = valueWidth
+		}
+		if rw := modernLabelWidth + 1 + vis; rw > ruleWidth {
+			ruleWidth = rw
+		}
+	}
+	fmt.Fprintf(w, "\n%*s%s\n", modernGutter, "", paint(ansiGray, strings.Repeat("─", ruleWidth)))
+	for _, f := range facts {
+		if f.breakout && visibleWidth(f.value) > valueWidth {
+			fmt.Fprintf(w, "%*s%s\n", modernGutter, "", paint(ansiGray, f.label))
+			fmt.Fprintf(w, "%*s%s\n", modernGutter+2, "", f.value)
+			continue
+		}
+		label := paint(ansiGray, fmt.Sprintf("%-*s", modernLabelWidth, f.label))
+		// Colored values carry escape codes that would defeat rune-counted
+		// wrapping; they are short by construction (or breakout-rendered
+		// above) and printed as-is. Plain values (command, worktree, advice)
+		// wrap with a hanging indent so a narrow terminal never breaks the
+		// two-column grid mid-word.
+		if strings.Contains(f.value, "\x1b") {
+			fmt.Fprintf(w, "%*s%s %s\n", modernGutter, "", label, f.value)
+			continue
+		}
+		lines := wrapWords(f.value, valueWidth)
+		fmt.Fprintf(w, "%*s%s %s\n", modernGutter, "", label, lines[0])
+		for _, line := range lines[1:] {
+			fmt.Fprintf(w, "%*s%s\n", modernGutter+modernLabelWidth+1, "", line)
+		}
+	}
+}
+
+// dimParenthetical dims a value's trailing parenthetical — the manager row's
+// build provenance — so the part that matters (name and version) keeps full
+// contrast.
+func dimParenthetical(s string) string {
+	i := strings.Index(s, " (")
+	if i < 0 {
+		return s
+	}
+	return s[:i] + " " + paint(ansiGray, s[i+1:])
+}
+
+// writeModernDiagnostics renders diagnostics as their own block — a warning
+// glyph heading and one bullet per item — instead of burying them in the dim
+// fact column: caveats are the honesty contract and deserve full contrast.
+// Text wraps at word boundaries with a hanging indent; version pairs are
+// atomic tokens ("1.0.0->2.0.0"), so a pair never splits across lines, and
+// the ASCII arrow is swapped for the modern glyph.
+func writeModernDiagnostics(w io.Writer, diagnostics []string) {
+	if len(diagnostics) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\n%*s%s\n", modernGutter, "", paint(ansiYellow, "⚠ diagnostics"))
+	indent := modernGutter + 2
+	width := terminalLineWidth(w) - indent - 2
+	for _, d := range diagnostics {
+		d = strings.ReplaceAll(d, "->", glyphArrow)
+		lines := wrapWords(d, width)
+		fmt.Fprintf(w, "%*s%s %s\n", indent, "", paint(ansiYellow, "·"), lines[0])
+		for _, line := range lines[1:] {
+			fmt.Fprintf(w, "%*s%s\n", indent+2, "", line)
+		}
 	}
 }
 
 // writeModernChanges lists dependency changes with the path prefix dimmed and
 // the leaf name highlighted, with version columns aligned across all entries.
-func writeModernChanges(w io.Writer, title string, changes []manifest.Change) {
+// The glyph and accent color carry the list's epistemic status — red for the
+// certified minimal set, yellow for an unproven best-known set, a neutral dim
+// bullet for a plain listing — so certainty is never overstated by styling.
+func writeModernChanges(w io.Writer, title string, changes []manifest.Change, glyph, accent string) {
 	if len(changes) == 0 {
 		return
 	}
@@ -682,8 +903,17 @@ func writeModernChanges(w io.Writer, title string, changes []manifest.Change) {
 		// spaces, but never "->"), so spec content cannot be rewritten.
 		ver := changeVersionStr(change)
 		ver = strings.Replace(ver, " -> ", " "+paint(ansiGray, glyphArrow)+" ", 1)
-		namePart := paint(ansiGray, prefix) + paint(ansiRed, leaf)
-		fmt.Fprintf(w, "%*s%s %s%s%s\n", modernGutter*2, "", paint(ansiRed, glyphFail), namePart, pad, paint(ansiGray, ver))
+		verPainted := paint(ansiGray, ver)
+		// Tint the lockfile-only tag so it reads as a category, not trailing
+		// version text; the surrounding gray resumes after it.
+		verPainted = strings.Replace(verPainted, "(lockfile-only)",
+			ansiReset+paint(ansiCyanDim, "(lockfile-only)")+ansiGray, 1)
+		leafPart := leaf
+		if accent != ansiGray {
+			leafPart = paint(accent, leaf)
+		}
+		fmt.Fprintf(w, "%*s%s %s%s%s\n", modernGutter*2, "",
+			paint(accent, glyph), paint(ansiGray, prefix)+leafPart, pad, verPainted)
 	}
 }
 
@@ -710,6 +940,9 @@ func changeVersionStr(c manifest.Change) string {
 	suffix := ""
 	if c.Section != manifest.Dependencies {
 		suffix = " (" + string(c.Section) + ")"
+	}
+	if c.LockfileOnly {
+		suffix += " (lockfile-only)"
 	}
 	switch c.Kind {
 	case manifest.Added:
@@ -740,7 +973,10 @@ func summaryGlyph(outcome string) (glyph, color string) {
 	case engine.OutcomeDryRun:
 		return glyphArrow, ansiCyan
 	default:
-		return glyphActive, ansiYellow
+		// A finished run must not wear the in-progress glyph: warning
+		// outcomes (fails-at-base, inconclusive, no-changes) get a warning
+		// mark, matching the diagnostics block's tone.
+		return glyphWarn, ansiYellow
 	}
 }
 

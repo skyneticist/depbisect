@@ -43,7 +43,7 @@ _depbisect() {
                     return
                     ;;
             esac
-            COMPREPLY=( $(compgen -W "--base --to --repo --runs --jobs -j --run-timeout --install-timeout --overall-timeout --pm --report-md --report-json --no-reports --checkpoint --resume --keep-worktrees --dry-run --quiet --verbose --style --" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--base --to --repo --runs --jobs -j --run-timeout --install-timeout --overall-timeout --pm --report-md --report-json --no-reports --checkpoint --resume --keep-worktrees --dry-run --no-lockfile-pins --quiet --verbose --style --" -- "$cur") )
             ;;
         completion)
             COMPREPLY=( $(compgen -W "bash zsh" -- "$cur") )
@@ -116,6 +116,7 @@ _depbisect() {
                 '--resume[resume completed trials from checkpoint]' \
                 '--keep-worktrees[keep temporary worktree]' \
                 '--dry-run[plan only]' \
+                '--no-lockfile-pins[do not bisect lockfile-only changes via exact version pins]' \
                 '--quiet[suppress progress and print only the final result]' \
                 '--verbose[verbose output]' \
                 '--style[output style]:style:(modern classic)'

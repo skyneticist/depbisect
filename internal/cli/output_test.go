@@ -194,9 +194,9 @@ func TestSummaryGlyph(t *testing.T) {
 		{engine.OutcomeMinimalFound, glyphOK, ansiGreen},
 		{engine.OutcomeNotReproduced, glyphOK, ansiGreen},
 		{engine.OutcomeDryRun, glyphArrow, ansiCyan},
-		{engine.OutcomeInconclusive, glyphActive, ansiYellow},
-		{engine.OutcomeFailsAtBase, glyphActive, ansiYellow},
-		{"unknown", glyphActive, ansiYellow},
+		{engine.OutcomeInconclusive, glyphWarn, ansiYellow},
+		{engine.OutcomeFailsAtBase, glyphWarn, ansiYellow},
+		{"unknown", glyphWarn, ansiYellow},
 	}
 	for _, tc := range cases {
 		g, c := summaryGlyph(tc.outcome)
@@ -656,9 +656,13 @@ func TestPrintModernSummaryOutcomes(t *testing.T) {
 			if tc.want != "" && !strings.Contains(out, tc.want) {
 				t.Errorf("outcome %q: want %q in output, got:\n%s", tc.outcome, tc.want, out)
 			}
-			// All outcomes should have the fact section
-			if !strings.Contains(out, "outcome") {
-				t.Errorf("outcome %q: missing fact 'outcome' in modern summary", tc.outcome)
+			// All outcomes should have the fact section.
+			if !strings.Contains(out, "command") {
+				t.Errorf("outcome %q: missing fact section in modern summary", tc.outcome)
+			}
+			// The machine outcome token stays out of the human summary.
+			if strings.Contains(out, tc.outcome) {
+				t.Errorf("outcome %q: machine token should not appear in modern summary:\n%s", tc.outcome, out)
 			}
 		})
 	}
@@ -718,7 +722,7 @@ func TestPrintModernSummaryWorktreeAndReports(t *testing.T) {
 
 func TestWriteModernChangesEmpty(t *testing.T) {
 	var buf bytes.Buffer
-	writeModernChanges(&buf, "changes", nil)
+	writeModernChanges(&buf, "changes", nil, glyphFail, ansiRed)
 	if buf.Len() != 0 {
 		t.Errorf("empty changes should write nothing, got: %q", buf.String())
 	}
@@ -773,7 +777,7 @@ func TestWriteModernChangesGoModule(t *testing.T) {
 	changes := []manifest.Change{
 		{Name: "github.com/org/pkg", OldSpec: "v1.0.0", NewSpec: "v2.0.0", Kind: manifest.Updated, Section: manifest.Dependencies},
 	}
-	writeModernChanges(&buf, "minimal set", changes)
+	writeModernChanges(&buf, "minimal set", changes, glyphFail, ansiRed)
 	out := buf.String()
 	if !strings.Contains(out, "pkg") {
 		t.Errorf("want leaf name 'pkg' in output, got: %q", out)
