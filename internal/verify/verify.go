@@ -27,9 +27,11 @@ type RunResult struct {
 	ExitCode int
 	Duration time.Duration
 	TimedOut bool
-	// OutputTail is the end of a failing run's output — stderr when it has
-	// content, stdout otherwise — capped at failureTailLimit bytes. Passing
-	// runs carry none; it exists purely as failure evidence.
+	// OutputTail is the end of a failing run's output — stdout then stderr,
+	// since evidence location differs by runner (Rust's libtest reports
+	// failures on stdout while cargo's own trailer is stderr; node asserts
+	// on stderr) — capped at failureTailLimit bytes. Passing runs carry
+	// none; it exists purely as failure evidence.
 	OutputTail string
 }
 
@@ -110,18 +112,24 @@ func (v Verdict) FailureTail() string {
 	return ""
 }
 
-// failureTail selects and caps the evidence stream of a failed run: stderr
-// when it has any non-blank content, stdout otherwise (test runners are split
-// on where they report failures).
+// failureTail joins and caps the evidence of a failed run: stdout first,
+// stderr last. Runners disagree about where failures go — Rust's libtest
+// prints the panic on stdout while cargo appends its own trailer to stderr;
+// node asserts on stderr — so keeping both (tail-capped) lets the renderer's
+// boilerplate filter surface whichever half carries the real error.
 func failureTail(res execx.Result) string {
-	src := res.Stderr
-	if _, ok := execx.FirstLine(src); !ok {
-		src = res.Stdout
+	parts := make([]string, 0, 2)
+	if _, ok := execx.FirstLine(res.Stdout); ok {
+		parts = append(parts, strings.TrimRight(string(res.Stdout), "\n"))
 	}
-	if len(src) > failureTailLimit {
-		src = src[len(src)-failureTailLimit:]
+	if _, ok := execx.FirstLine(res.Stderr); ok {
+		parts = append(parts, strings.TrimRight(string(res.Stderr), "\n"))
 	}
-	return strings.TrimRight(string(src), "\n")
+	s := strings.Join(parts, "\n")
+	if len(s) > failureTailLimit {
+		s = s[len(s)-failureTailLimit:]
+	}
+	return s
 }
 
 // AllRunsTimedOut reports whether every executed run hit the per-run timeout.

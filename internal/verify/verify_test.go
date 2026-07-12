@@ -65,29 +65,30 @@ func TestVerifyAlwaysFailing(t *testing.T) {
 }
 
 func TestVerifyFailureTail(t *testing.T) {
-	// stderr wins when it has content; failing runs carry the tail, passing
+	// Both streams are kept — stdout first, stderr last — since runners
+	// disagree about where failures go. Failing runs carry the tail, passing
 	// runs never do.
-	r := &seqRunner{codes: []int{1, 0}, stderr: "assert blew up\n", stdout: "noise"}
+	r := &seqRunner{codes: []int{1, 0}, stderr: "assert blew up\n", stdout: "harness progress"}
 	h := Harness{Runner: r, Command: []string{"npm", "test"}, Runs: 2}
 	v, err := h.Verify(context.Background(), "/dir")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := v.FailureTail(); got != "assert blew up" {
+	if got := v.FailureTail(); got != "harness progress\nassert blew up" {
 		t.Errorf("FailureTail = %q", got)
 	}
 	if v.Runs[1].OutputTail != "" {
 		t.Errorf("passing run must carry no tail: %+v", v.Runs[1])
 	}
 
-	// Blank stderr falls back to stdout.
+	// A blank stream contributes nothing.
 	r = &seqRunner{codes: []int{1}, stderr: " \n", stdout: "FAILED test_parse\n"}
 	h = Harness{Runner: r, Command: []string{"pytest"}}
 	if v, err = h.Verify(context.Background(), "/dir"); err != nil {
 		t.Fatal(err)
 	}
 	if got := v.FailureTail(); got != "FAILED test_parse" {
-		t.Errorf("stdout fallback FailureTail = %q", got)
+		t.Errorf("blank-stderr FailureTail = %q", got)
 	}
 
 	// Oversized output keeps only the tail, where the evidence lives.

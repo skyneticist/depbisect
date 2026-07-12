@@ -88,6 +88,15 @@ All notable changes to this project are documented here. The format follows
 - `next` commands are never hard-wrapped: classic prints them on one physical
   line, and the modern grid gives an over-wide command its own full-width
   line under a bare label — selecting that line copies the exact command.
+- Failure evidence keeps both output streams (stdout first, stderr last):
+  runners disagree about where failures go — Rust's libtest reports on stdout
+  while cargo's rerun epilogue is stderr — so cargo verdicts now show the
+  failed test instead of the generic "to rerun pass" hint, whose epilogue
+  (and libtest's backtrace note) joined the filtered boilerplate.
+- The transitive-drift diagnostic is calibrated to what the bisection can
+  actually miss: with candidates in play it notes that reverting a candidate
+  also reverts the transitives it pulls in, reserving "results may be
+  incomplete" for drift with no direct changes to ride on.
 
 - The npm and yarn demo generators now place their offline packages inside
   the generated app repository with relative `file:./pkgs/...` specifiers,

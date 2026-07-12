@@ -1254,6 +1254,34 @@ func TestRunTransitiveDriftDiagnosed(t *testing.T) {
 	if !strings.Contains(joined, "transitive") || !strings.Contains(joined, "trans (7.0.0->7.5.0)") {
 		t.Errorf("diagnostics = %v, want transitive drift naming trans", res.Diagnostics)
 	}
+	// With candidates in play the drift is mostly covered by reverts; the
+	// diagnostic must say so instead of crying incompleteness.
+	if !strings.Contains(joined, "usually covered") || strings.Contains(joined, "results may be incomplete") {
+		t.Errorf("diagnostics should use the calibrated wording when candidates exist: %v", res.Diagnostics)
+	}
+}
+
+func TestRunPureTransitiveDriftWarnsHard(t *testing.T) {
+	git := threeChangeRepo()
+	// Identical manifests and identical direct resolutions; only a transitive
+	// entry moved. Nothing is bisectable, so the warning must be blunt.
+	git.files["sha-head"]["package.json"] = git.files["sha-base"]["package.json"]
+	git.files["sha-base"]["package-lock.json"] = strings.Replace(lockOld,
+		`"node_modules/gamma"`, `"node_modules/trans":{"version":"7.0.0"},"node_modules/gamma"`, 1)
+	git.files["sha-head"]["package-lock.json"] = strings.Replace(lockOld,
+		`"node_modules/gamma"`, `"node_modules/trans":{"version":"7.5.0"},"node_modules/gamma"`, 1)
+	env := newEnv(t, git, func(map[string]string) bool { return true }, 1)
+	res, err := env.eng.Run(context.Background(), baseOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != OutcomeNoChanges {
+		t.Fatalf("outcome = %q", res.Outcome)
+	}
+	joined := strings.Join(res.Diagnostics, "\n")
+	if !strings.Contains(joined, "trans (7.0.0->7.5.0)") || !strings.Contains(joined, "results may be incomplete") {
+		t.Errorf("pure drift should keep the hard warning: %v", res.Diagnostics)
+	}
 }
 
 func TestRunDryRun(t *testing.T) {

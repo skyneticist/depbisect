@@ -385,11 +385,20 @@ func (e *Engine) Run(ctx context.Context, opts Options) (*Result, error) {
 	// meaningful for ecosystems with a real lockfile.
 	if manager != pm.GO {
 		if drift := transitiveDrift(basePkg, toPkg, oldResolved, newResolved, changes, lockOnly); len(drift) > 0 {
+			// Calibrate the warning to what the bisection can actually miss:
+			// with candidates in play, reverting one also reverts the
+			// transitives it pulls in, so most drift is covered; with no
+			// candidates at all, none of it is.
+			tail := "Reverting a candidate also reverts the transitives it pulls in, so these are " +
+				"usually covered; only drift tied to no direct change cannot be isolated."
+			if len(changes) == 0 {
+				tail = "DepBisect bisects direct dependencies only and found no direct changes to " +
+					"revert, so none of these can be isolated; if the culprit is among them, " +
+					"results may be incomplete."
+			}
 			res.Diagnostics = append(res.Diagnostics, fmt.Sprintf(
-				"%s resolved differently between the two revisions without any direct dependency changing: %s. "+
-					"DepBisect bisects direct dependencies only; if the culprit is among these transitive changes, "+
-					"results may be incomplete.",
-				pluralize(len(drift), "transitive dependency", "transitive dependencies"), lockfileOnlyNames(drift)))
+				"%s resolved differently between the two revisions: %s. %s",
+				pluralize(len(drift), "transitive dependency", "transitive dependencies"), lockfileOnlyNames(drift), tail))
 		}
 	}
 	summary := pluralize(len(changes), "direct dependency change", "direct dependency changes")

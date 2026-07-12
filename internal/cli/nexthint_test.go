@@ -371,8 +371,10 @@ func TestExcerptLinesFiltersBoilerplateAndTruncates(t *testing.T) {
 	excerpt := strings.Join([]string{
 		"npm ERR! code ELIFECYCLE",
 		"AssertionError: expected 5, got NaN plus a very long explanation trailing on",
+		"note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
 		"npm ERR! A complete log of this run can be found in:",
 		"npm ERR!     /Users/x/.npm/_logs/2026-07-12T00_00_00_000Z-debug-0.log",
+		"error: test failed, to rerun pass `--test cli`",
 		"Node.js v22.1.0",
 	}, "\n")
 	got := excerptLines(excerpt, 3, 40)

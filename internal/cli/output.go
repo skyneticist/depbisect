@@ -687,6 +687,13 @@ func excerptBoilerplate(line string) bool {
 		return true // node's crash-report version trailer
 	case strings.HasPrefix(trimmed, "info Visit https://yarnpkg.com"):
 		return true // yarn classic's help-link epilogue
+	case strings.HasPrefix(trimmed, "error: test failed, to rerun pass"):
+		return true // cargo's rerun epilogue; the panic itself is on stdout
+	case strings.HasPrefix(trimmed, "note: run with `RUST_BACKTRACE="):
+		return true // libtest's backtrace hint under every panic
+	// Deliberately NOT filtered: libtest's "failures:" header. Dropping it
+	// pulls in whatever precedes it — often the raw tail of an assertion
+	// diff, which reads worse than the structured failed-test list it heads.
 	default:
 		return false
 	}
