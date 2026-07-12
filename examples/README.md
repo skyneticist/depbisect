@@ -352,6 +352,30 @@ Expected result: minimal failing set = `breakage 1.0.0 -> 2.0.0 (lockfile-only)`
 Pass `--no-lockfile-pins` to see the pre-pinning behavior: no bisectable
 changes, with the drift reported as a diagnostic instead.
 
+### Real-world variant (network required)
+
+`make-demo-python-realworld.sh` builds the same story from **real PyPI
+packages** at `examples/demo-python-realworld/` — the only generator that
+needs network access, so it feeds demo recordings rather than CI. The base
+lockfile is resolved with `uv lock --exclude-newer 2024-06-01T00:00:00Z`,
+two weeks before NumPy 2.0.0 shipped, so the ranges lock to the last 1.26.x
+no matter when the script runs. The head commit bumps the `rich` and `click`
+pins in `pyproject.toml` and refreshes everything else with `uv lock -U`:
+numpy, requests, and attrs move only in the lockfile, and NumPy 2.0's
+removal of `np.float_` is the culprit.
+
+```sh
+./examples/make-demo-python-realworld.sh
+go build ./cmd/depbisect
+./depbisect run --repo examples/demo-python-realworld/app --base HEAD~1 --runs 3 -- uv run -- python check.py
+```
+
+Expected result: minimal failing set = `numpy 1.26.4 -> 2.x (lockfile-only)`,
+with the real `AttributeError: np.float_ was removed in the NumPy 2.0
+release` as the failure evidence.
+
+![DepBisect convicting NumPy 2.0 from a mixed manifest and lockfile-only update](../docs/assets/gifs/python/uv-realworld.gif)
+
 ## PHP (composer) demo
 
 `make-demo-composer.sh` generates a PHP equivalent at `examples/demo-composer/`.
