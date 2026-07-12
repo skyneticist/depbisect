@@ -311,7 +311,7 @@ func TestE2EFindsCulpritNpm(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	for _, want := range []string{"Changes 3 analyzed", "Breaking dependencies", "leftpad  1.0.0 -> 2.0.0", "Evidence 3/3 failing runs"} {
+	for _, want := range []string{"across 3 changes", "Breaking dependencies", "leftpad  1.0.0 -> 2.0.0", "Evidence 3/3 failing runs", "Next npm install --save-exact leftpad@1.0.0"} {
 		if !strings.Contains(res.stdout, want) {
 			t.Errorf("stdout missing %q:\n%s", want, res.stdout)
 		}
@@ -430,9 +430,7 @@ func TestE2ENotReproduced(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Result No breaking dependency update reproduced the failure",
-		"Outcome not-reproduced",
-		"Changes 3 analyzed",
-		"Trials 2",
+		"Trials 2 across 3 changes",
 		"passed 1/1 runs with all dependency updates applied",
 	} {
 		if !strings.Contains(res.stdout, want) {
@@ -518,7 +516,7 @@ func TestE2EDryRun(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
 	}
-	for _, want := range []string{"Dependency changes", "alpha", "leftpad", "Outcome dry-run"} {
+	for _, want := range []string{"Dependency changes", "alpha", "leftpad", "Changes 3 analyzed"} {
 		if !strings.Contains(res.stdout, want) {
 			t.Errorf("dry-run stdout missing %q:\n%s", want, res.stdout)
 		}

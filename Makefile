@@ -205,6 +205,12 @@ demo-python: build ## Python (uv): bisect the offline example repo (culprit: bre
 	$(call demo_setup,make-demo-python.sh)
 	$(call demo_run,$(BINARY) run --repo examples/demo-python/app --base HEAD~1 --runs 3 -- uv run -- python check.py)
 
+.PHONY: demo-python-lockonly
+demo-python-lockonly: export UV_PYTHON_PREFERENCE = only-system
+demo-python-lockonly: build ## Python (uv): bisect a lockfile-only refresh (pyproject.toml unchanged).
+	$(call demo_setup,make-demo-python-lockonly.sh)
+	$(call demo_run,$(BINARY) run --repo examples/demo-python-lockonly/app --base HEAD~1 --runs 3 -- uv run -- python check.py)
+
 .PHONY: demo-composer
 demo-composer: build ## PHP (composer): bisect the offline example repo (culprit: breakage).
 	$(call demo_setup,make-demo-composer.sh)

@@ -736,6 +736,22 @@ jobs:
       - name: Assert the culprit was identified
         run: |
           jq -e '.outcome == "minimal-set-found" and .packageManager == "uv" and (.minimalSet | length) == 1 and .minimalSet[0].name == "breakage"' depbisect-python-report.json
+      # The lockfile-only variant: pyproject.toml is identical at both
+      # commits and only uv.lock moved, so the culprit is reachable only
+      # through synthesized exact version pins.
+      - name: Generate lockfile-only Python example repo
+        run: ./examples/make-demo-python-lockonly.sh
+      - name: Bisect the lockfile-only example repo
+        run: |
+          ./depbisect run \
+            --repo examples/demo-python-lockonly/app \
+            --base HEAD~1 \
+            --runs 3 \
+            --report-json depbisect-python-lockonly-report.json \
+            -- uv run -- python check.py
+      - name: Assert the lockfile-only culprit was identified via pins
+        run: |
+          jq -e '.outcome == "minimal-set-found" and (.minimalSet | length) == 1 and .minimalSet[0].name == "breakage" and .minimalSet[0].lockfileOnly == true and (.lockfileOnlyChanges | length) == 0' depbisect-python-lockonly-report.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
