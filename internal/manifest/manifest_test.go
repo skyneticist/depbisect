@@ -263,6 +263,21 @@ const packageLockV3Link = `{
   }
 }`
 
+// The in-repo demo layout: every version of a linked package lives inside the
+// repository, so the lockfile lists the unreferenced ones as extraneous
+// siblings sharing the dependency's name. The link chain, not a name scan,
+// must decide the resolved version.
+const packageLockV3InRepoLink = `{
+  "name": "demo",
+  "lockfileVersion": 3,
+  "packages": {
+    "": {"name": "demo-app", "dependencies": {"leftpad": "file:./pkgs/leftpad-2.0.0"}},
+    "node_modules/leftpad": {"resolved": "pkgs/leftpad-2.0.0", "link": true},
+    "pkgs/leftpad-1.0.0": {"name": "leftpad", "version": "1.0.0", "extraneous": true},
+    "pkgs/leftpad-2.0.0": {"name": "leftpad", "version": "2.0.0"}
+  }
+}`
+
 const packageLockV1 = `{
   "name": "demo",
   "lockfileVersion": 1,
@@ -280,6 +295,7 @@ func TestParsePackageLock(t *testing.T) {
 	}{
 		{"v3 packages", packageLockV3, Resolved{"alpha": "1.0.3", "@scope/pkg": "2.1.0"}},
 		{"v3 file link", packageLockV3Link, Resolved{"leftpad": "1.0.0"}},
+		{"v3 in-repo link with extraneous sibling", packageLockV3InRepoLink, Resolved{"leftpad": "2.0.0"}},
 		{"v1 dependencies", packageLockV1, Resolved{"alpha": "1.0.3", "beta": "2.0.0"}},
 	}
 	for _, tc := range cases {

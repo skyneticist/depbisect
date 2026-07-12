@@ -12,6 +12,12 @@
 # The application fails only when both paths are broken, so the expected
 # minimal failing set contains all five packages. The other seven updates are
 # harmless noise. Everything is offline: all packages use local file: paths.
+#
+# The packages live *inside* the app repository (file:./pkgs/...), like the
+# pnpm demo: relative in-repo paths travel with every git worktree, survive a
+# move to another machine, and work when the fixture is mounted into the
+# Docker image. (Relative specs also sidestep the MSYS path-format problem
+# that absolute file: paths hit under Git Bash on Windows.)
 set -eu
 
 for tool in git node npm; do
@@ -20,21 +26,13 @@ done
 
 cd "$(dirname "$0")"
 rm -rf demo-complex
-mkdir -p demo-complex/pkgs
+mkdir -p demo-complex/app/pkgs
 ROOT=$(cd demo-complex && pwd)
 
-# Filesystem ops below use the POSIX $ROOT. npm can't resolve MSYS-style
-# /d/a/... paths in file: specs on Windows, so under Git Bash point the file:
-# deps at the native D:/a/... path ($NPM_ROOT) instead.
-NPM_ROOT=$ROOT
-case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*) NPM_ROOT=$(cd "$ROOT" && pwd -W) ;;
-esac
-
 mkpkg() { # name version body
-    mkdir -p "$ROOT/pkgs/$1-$2"
-    printf '{"name":"%s","version":"%s","main":"index.js"}\n' "$1" "$2" > "$ROOT/pkgs/$1-$2/package.json"
-    printf '%s\n' "$3" > "$ROOT/pkgs/$1-$2/index.js"
+    mkdir -p "$ROOT/app/pkgs/$1-$2"
+    printf '{"name":"%s","version":"%s","main":"index.js"}\n' "$1" "$2" > "$ROOT/app/pkgs/$1-$2/package.json"
+    printf '%s\n' "$3" > "$ROOT/app/pkgs/$1-$2/index.js"
 }
 
 # Seven harmless updates provide noise around the interacting failures.
@@ -67,7 +65,6 @@ mkpkg cache-writer 2.0.0 "module.exports = (value) => JSON.stringify({ value }) 
 mkpkg cache-reader 1.0.0 "module.exports = (payload) => JSON.parse(String(payload).trim()).value;"
 mkpkg cache-reader 2.0.0 "module.exports = (payload) => { const raw = String(payload); if (raw !== raw.trim()) throw new Error('trailing data rejected'); return JSON.parse(raw).value; };"
 
-mkdir "$ROOT/app"
 cd "$ROOT/app"
 git init -q -b main
 
@@ -81,22 +78,22 @@ write_manifest() { # analytics flags logger metrics request retry schema cacheR 
   "name": "demo-complex-app",
   "version": "1.0.0",
   "dependencies": {
-    "analytics-core": "file:$NPM_ROOT/pkgs/analytics-core-$1",
-    "cache-reader": "file:$NPM_ROOT/pkgs/cache-reader-$8",
-    "cache-writer": "file:$NPM_ROOT/pkgs/cache-writer-$9",
-    "feature-flags": "file:$NPM_ROOT/pkgs/feature-flags-$2",
-    "logger": "file:$NPM_ROOT/pkgs/logger-$3",
-    "request-id": "file:$NPM_ROOT/pkgs/request-id-$5",
-    "retry-policy": "file:$NPM_ROOT/pkgs/retry-policy-$6",
-    "wire-decoder": "file:$NPM_ROOT/pkgs/wire-decoder-${10}",
-    "wire-encoder": "file:$NPM_ROOT/pkgs/wire-encoder-${11}",
-    "wire-transport": "file:$NPM_ROOT/pkgs/wire-transport-${12}"
+    "analytics-core": "file:./pkgs/analytics-core-$1",
+    "cache-reader": "file:./pkgs/cache-reader-$8",
+    "cache-writer": "file:./pkgs/cache-writer-$9",
+    "feature-flags": "file:./pkgs/feature-flags-$2",
+    "logger": "file:./pkgs/logger-$3",
+    "request-id": "file:./pkgs/request-id-$5",
+    "retry-policy": "file:./pkgs/retry-policy-$6",
+    "wire-decoder": "file:./pkgs/wire-decoder-${10}",
+    "wire-encoder": "file:./pkgs/wire-encoder-${11}",
+    "wire-transport": "file:./pkgs/wire-transport-${12}"
   },
   "devDependencies": {
-    "schema-tools": "file:$NPM_ROOT/pkgs/schema-tools-$7"
+    "schema-tools": "file:./pkgs/schema-tools-$7"
   },
   "optionalDependencies": {
-    "metrics-sink": "file:$NPM_ROOT/pkgs/metrics-sink-$4"
+    "metrics-sink": "file:./pkgs/metrics-sink-$4"
   }
 }
 EOF

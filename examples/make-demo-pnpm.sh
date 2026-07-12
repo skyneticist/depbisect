@@ -4,7 +4,7 @@
 # `node test.js`. Everything is offline: dependencies are local file:
 # packages, so pnpm never touches a registry.
 #
-# Unlike the npm and yarn demos, the packages live *inside* the app repository
+# Like the other JS demos, the packages live *inside* the app repository
 # (file:./pkgs/...): pnpm rewrites file: specifiers to lockfile-relative paths
 # in pnpm-lock.yaml, so out-of-repo absolute paths would break the moment
 # DepBisect materializes the repo in a temporary worktree. In-repo relative

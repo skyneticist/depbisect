@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -33,29 +34,52 @@ func ParsePackageLock(data []byte) (Resolved, error) {
 	out := Resolved{}
 	switch {
 	case lock.Packages != nil: // lockfile v2/v3
+		type lockEntry struct {
+			Name       string `json:"name"`
+			Version    string `json:"version"`
+			Link       bool   `json:"link"`
+			Resolved   string `json:"resolved"`
+			Extraneous bool   `json:"extraneous"`
+		}
+		entries := make(map[string]lockEntry, len(lock.Packages))
 		for path, raw := range lock.Packages {
-			var entry struct {
-				Name    string `json:"name"`
-				Version string `json:"version"`
-			}
+			var entry lockEntry
 			if err := json.Unmarshal(raw, &entry); err != nil {
 				return nil, fmt.Errorf("parse package-lock.json: entry %q: %w", path, err)
 			}
-			if entry.Version == "" {
-				continue
-			}
+			entries[path] = entry
+		}
+		// Top-level node_modules/ entries are authoritative. A link entry
+		// (file: directory dependency) carries no version of its own: follow
+		// its resolved path to the target entry that does.
+		for path, entry := range entries {
 			name, ok := topLevelModuleName(path)
 			if !ok {
-				// Non-node_modules/ path: a linked file: package target whose
-				// version lives here rather than in the link entry. Use the
-				// explicit name field to identify it.
-				if entry.Name == "" {
-					continue
-				}
-				name = entry.Name
+				continue
 			}
-			if _, exists := out[name]; !exists {
-				out[name] = entry.Version
+			version := entry.Version
+			if version == "" && entry.Link {
+				version = entries[strings.TrimPrefix(entry.Resolved, "file:")].Version
+			}
+			if version != "" {
+				out[name] = version
+			}
+		}
+		// Fallback for linked targets whose node_modules/ entry is absent:
+		// identify them by their explicit name field. Entries npm marked
+		// extraneous are unreferenced (e.g. unused in-repo package dirs that
+		// share a dependency's name) and must not supply a version; sorted
+		// iteration keeps any remaining tie deterministic.
+		for _, path := range slices.Sorted(maps.Keys(entries)) {
+			entry := entries[path]
+			if _, ok := topLevelModuleName(path); ok || path == "" {
+				continue
+			}
+			if entry.Name == "" || entry.Version == "" || entry.Extraneous {
+				continue
+			}
+			if _, exists := out[entry.Name]; !exists {
+				out[entry.Name] = entry.Version
 			}
 		}
 	case lock.Dependencies != nil: // lockfile v1
@@ -163,9 +187,10 @@ func AnnotateResolved(changes []Change, old, new Resolved) {
 }
 
 // LockfileChange describes a dependency whose manifest spec is unchanged but
-// whose lockfile resolution differs between revisions. DepBisect cannot
-// bisect these (it materializes candidates by editing version specs), so they
-// are surfaced as diagnostics instead.
+// whose lockfile resolution differs between revisions. Most of these become
+// bisectable through PinChanges, which pins the old resolution as an exact
+// version spec; entries no ecosystem can pin faithfully are surfaced as
+// diagnostics instead.
 type LockfileChange struct {
 	Name        string
 	Section     Section
@@ -173,6 +198,10 @@ type LockfileChange struct {
 	OldResolved string
 	NewResolved string
 }
+
+// ID returns the identifier a Change synthesized from this entry would carry,
+// matching Change.ID.
+func (lc LockfileChange) ID() string { return string(lc.Section) + ":" + lc.Name }
 
 // LockfileOnly returns dependencies declared identically in both manifests
 // whose resolved versions nonetheless differ. Dependencies with an unknown

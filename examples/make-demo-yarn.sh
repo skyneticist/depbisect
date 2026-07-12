@@ -4,8 +4,14 @@
 # `node test.js`. Everything is offline: dependencies are local file:
 # packages, so yarn never touches a registry. The generated yarn.lock is the
 # classic v1 format — the toolchain CI runners preinstall; Berry lockfile
-# parsing is covered by the manifest unit tests. Re-run the script any time
-# to start fresh.
+# parsing is covered by the manifest unit tests.
+#
+# The packages live *inside* the app repository (file:./pkgs/...), like the
+# pnpm demo: relative in-repo paths travel with every git worktree, survive a
+# move to another machine, and work when the fixture is mounted into the
+# Docker image. (Relative specs also sidestep the MSYS path-format problem
+# that absolute file: paths hit under Git Bash on Windows.) Re-run the script
+# any time to start fresh.
 set -eu
 
 for tool in git node yarn; do
@@ -23,33 +29,24 @@ esac
 
 cd "$(dirname "$0")"
 rm -rf demo-yarn
-mkdir -p demo-yarn/pkgs
+mkdir -p demo-yarn/app/pkgs
 ROOT=$(cd demo-yarn && pwd)
 
-# Filesystem ops below use the POSIX $ROOT. yarn can't resolve MSYS-style
-# /d/a/... paths in file: specs on Windows, so under Git Bash point the file:
-# deps at the native D:/a/... path ($YARN_ROOT) instead.
-YARN_ROOT=$ROOT
-case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*) YARN_ROOT=$(cd "$ROOT" && pwd -W) ;;
-esac
-
-# --- local packages -----------------------------------------------------
+# --- local packages, committed with the app ------------------------------
 # alpha 1.0.0 and 1.1.0 are both fine; leftpad 2.0.0 pads the wrong side.
 for v in 1.0.0 1.1.0; do
-    mkdir -p "$ROOT/pkgs/alpha-$v"
-    printf '{"name":"alpha","version":"%s","main":"index.js","license":"MIT"}\n' "$v" > "$ROOT/pkgs/alpha-$v/package.json"
-    echo "module.exports = () => 'alpha';" > "$ROOT/pkgs/alpha-$v/index.js"
+    mkdir -p "$ROOT/app/pkgs/alpha-$v"
+    printf '{"name":"alpha","version":"%s","main":"index.js","license":"MIT"}\n' "$v" > "$ROOT/app/pkgs/alpha-$v/package.json"
+    echo "module.exports = () => 'alpha';" > "$ROOT/app/pkgs/alpha-$v/index.js"
 done
 
-mkdir -p "$ROOT/pkgs/leftpad-1.0.0" "$ROOT/pkgs/leftpad-2.0.0"
-printf '{"name":"leftpad","version":"1.0.0","main":"index.js","license":"MIT"}\n' > "$ROOT/pkgs/leftpad-1.0.0/package.json"
-echo "module.exports = (s, n) => String(s).padStart(n, ' ');" > "$ROOT/pkgs/leftpad-1.0.0/index.js"
-printf '{"name":"leftpad","version":"2.0.0","main":"index.js","license":"MIT"}\n' > "$ROOT/pkgs/leftpad-2.0.0/package.json"
-echo "module.exports = (s, n) => String(s).padEnd(n, ' '); // regression: pads the right side" > "$ROOT/pkgs/leftpad-2.0.0/index.js"
+mkdir -p "$ROOT/app/pkgs/leftpad-1.0.0" "$ROOT/app/pkgs/leftpad-2.0.0"
+printf '{"name":"leftpad","version":"1.0.0","main":"index.js","license":"MIT"}\n' > "$ROOT/app/pkgs/leftpad-1.0.0/package.json"
+echo "module.exports = (s, n) => String(s).padStart(n, ' ');" > "$ROOT/app/pkgs/leftpad-1.0.0/index.js"
+printf '{"name":"leftpad","version":"2.0.0","main":"index.js","license":"MIT"}\n' > "$ROOT/app/pkgs/leftpad-2.0.0/package.json"
+echo "module.exports = (s, n) => String(s).padEnd(n, ' '); // regression: pads the right side" > "$ROOT/app/pkgs/leftpad-2.0.0/index.js"
 
 # --- the app repository -------------------------------------------------
-mkdir "$ROOT/app"
 cd "$ROOT/app"
 git init -q -b main
 
@@ -64,8 +61,8 @@ cat > package.json <<EOF
   "license": "MIT",
   "private": true,
   "dependencies": {
-    "alpha": "file:$YARN_ROOT/pkgs/alpha-1.0.0",
-    "leftpad": "file:$YARN_ROOT/pkgs/leftpad-1.0.0"
+    "alpha": "file:./pkgs/alpha-1.0.0",
+    "leftpad": "file:./pkgs/leftpad-1.0.0"
   }
 }
 EOF
@@ -90,8 +87,8 @@ git_commit "base: working dependencies"
 node -e "
 const fs = require('fs');
 const p = JSON.parse(fs.readFileSync('package.json'));
-p.dependencies.alpha = 'file:$YARN_ROOT/pkgs/alpha-1.1.0';
-p.dependencies.leftpad = 'file:$YARN_ROOT/pkgs/leftpad-2.0.0';
+p.dependencies.alpha = 'file:./pkgs/alpha-1.1.0';
+p.dependencies.leftpad = 'file:./pkgs/leftpad-2.0.0';
 fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
 "
 yarn install --silent >/dev/null
