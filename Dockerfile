@@ -29,7 +29,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 
 # uv ships as a distroless binary image. Pulling it through a FROM stage
 # (rather than COPY --from=<ref>) keeps the pin visible to dependabot.
-FROM ghcr.io/astral-sh/uv:0.11 AS uv-dist
+FROM ghcr.io/astral-sh/uv:0.12 AS uv-dist
 
 # Composer ships as a PHAR in its official image. Pulling it through a FROM
 # stage (rather than curl-piping the installer) keeps the pin visible to
